@@ -11,7 +11,7 @@ import re
 import subprocess
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
-st.title("🏗️ ყოველდღიური რეპორტის გენერატორი (DPR)")
+st.title("🏗️ ყოველდღიური რეპორტის გენერატორი")
 st.caption("სითი მოლი საბურთალო — სრული ავტომატიზაცია")
 
 target_file = None
