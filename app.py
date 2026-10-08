@@ -352,10 +352,10 @@ if generate_btn:
                                 r.font.color.rgb = RGBColor(255, 255, 255)
 
             # B. WEATHER & WIND DIRECT REPLACEMENT (UNCONDITIONAL TAG SCANNER)
-            for row in table.rows:
+            for r_idx, row in enumerate(table.rows):
                 row_raw = " ".join([c.text for c in row.cells])
 
-                # Check 1: Scan cells directly for placeholders (guaranteed to replace {{ w9 }}, {{ w14 }}, {{ w18 }})
+                # Check 1: Scan cells directly for placeholders
                 for cell in row.cells:
                     c_txt = cell.text
                     if re.search(r'\{\{\s*w9\s*\}\}', c_txt):
@@ -377,14 +377,13 @@ if generate_btn:
                     elif re.search(r'\{\{\s*cond18\s*\}\}', c_txt):
                         set_clean_weather_cell(cell, cond18, font_size=9.0, bold=False)
 
-                # Check 2: Row matching by keyword (fallback if placeholders were already stripped)
+                # Check 2: Row matching by keyword (fallback)
                 if ("wind speed" in row_raw.lower() or "ქარის სიჩქარე" in row_raw) and len(row.cells) >= 5:
                     set_clean_wind_cell(row.cells[0], w9)
                     set_clean_wind_cell(row.cells[2], w14)
                     set_clean_wind_cell(row.cells[4], w18)
 
                 if any(h in row_raw for h in ["9:00", "09:00", "9·00"]) and "14:00" in row_raw:
-                    r_idx = table.rows.index(row)
                     if r_idx + 1 < len(table.rows):
                         t_row = table.rows[r_idx + 1]
                         if len(t_row.cells) >= 6:
