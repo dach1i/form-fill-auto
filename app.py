@@ -559,4 +559,82 @@ if generate_btn:
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
             candidate_pdf = abs_docx.rsplit(".", 1)[0] + ".pdf"
             if os.path.exists(candidate_pdf):
-                with open(
+                with open(candidate_pdf, "rb") as f_pdf:
+                    st.session_state["pdf_bytes"] = f_pdf.read()
+                pdf_converted = True
+                if os.path.exists(candidate_pdf):
+                    os.remove(candidate_pdf)
+        except Exception as e:
+            conversion_error = e
+
+        # 2. Try Windows Microsoft Word (Local Windows PC)
+        if not pdf_converted:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                from docx2pdf import convert
+                convert(abs_docx, abs_pdf)
+                if os.path.exists(abs_pdf):
+                    with open(abs_pdf, "rb") as f_pdf:
+                        st.session_state["pdf_bytes"] = f_pdf.read()
+                    pdf_converted = True
+            except Exception:
+                try:
+                    import win32com.client
+                    word_app = win32com.client.DispatchEx("Word.Application")
+                    word_app.Visible = False
+                    word_app.DisplayAlerts = False
+                    w_doc = word_app.Documents.Open(abs_docx)
+                    w_doc.SaveAs(abs_pdf, FileFormat=17)
+                    w_doc.Close()
+                    word_app.Quit()
+                    if os.path.exists(abs_pdf):
+                        with open(abs_pdf, "rb") as f_pdf:
+                            st.session_state["pdf_bytes"] = f_pdf.read()
+                        pdf_converted = True
+                except Exception as e2:
+                    conversion_error = e2
+                    st.session_state["pdf_bytes"] = None
+
+        # Clean up temporary disk files
+        if os.path.exists(abs_docx):
+            try:
+                os.remove(abs_docx)
+            except Exception:
+                pass
+        if os.path.exists(abs_pdf):
+            try:
+                os.remove(abs_pdf)
+            except Exception:
+                pass
+
+        if not pdf_converted:
+            st.warning(f"💡 შენიშვნა: PDF ვერ დაგენერირდა ({conversion_error}). გადმოწერეთ Word ფაილი.")
+
+    except Exception as e:
+        st.error(f"შეცდომა რეპორტის შექმნისას: {e}")
+
+# ==================== DOWNLOAD BUTTONS ====================
+if st.session_state["docx_bytes"] is not None:
+    d_code = st.session_state["doc_code"]
+    st.success(f"🎉 რეპორტი მზადაა: **{d_code}**")
+
+    b_col1, b_col2 = st.columns(2)
+    b_col1.download_button(
+        label="📥 1. გადმოწერეთ Word (.docx)",
+        data=st.session_state["docx_bytes"],
+        file_name=f"{d_code}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
+    )
+
+    if st.session_state["pdf_bytes"] is not None:
+        b_col2.download_button(
+            label="🖨️ 2. გადმოწერეთ დასაბეჭდი PDF (.pdf)",
+            data=st.session_state["pdf_bytes"],
+            file_name=f"{d_code}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+    else:
+        b_col2.info("💡 PDF ღილაკისთვის Streamlit Cloud-ზე GitHub რეპოზიტორიაში დაამატეთ `packages.txt` ჩანაწერით: `libreoffice`.")
