@@ -7,6 +7,7 @@ import io
 import os
 import copy
 import json
+import re
 import subprocess
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
@@ -65,13 +66,16 @@ def clone_row(table, source_row):
     table._tbl.append(tr_copy)
     return table.rows[-1]
 
-def safe_replace(p, old, new):
-    if old in p.text:
+# Bulletproof placeholder replacement for paragraphs (handles split XML runs)
+def replace_in_p(p, pattern, replacement):
+    if re.search(pattern, p.text):
+        matched = False
         for r in p.runs:
-            if old in r.text:
-                r.text = r.text.replace(old, new)
-        if old in p.text:
-            p.text = p.text.replace(old, new)
+            if re.search(pattern, r.text):
+                r.text = re.sub(pattern, str(replacement), r.text)
+                matched = True
+        if not matched and re.search(pattern, p.text):
+            p.text = re.sub(pattern, str(replacement), p.text)
 
 # Clears the entire cell and writes ONE clean header block with pure white text
 def set_cell_header_block(cell, label, value):
@@ -108,7 +112,7 @@ def set_clean_weather_cell(cell, text, font_size=9.0, bold=False):
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# Wind speed cell formatter
+# Wind speed cell formatter: formats the label and speed cleanly
 def set_clean_wind_cell(cell, wind_val):
     tc = cell._tc
     for child in list(tc):
@@ -304,11 +308,11 @@ if generate_btn:
                     raw_c = cell.text.strip()
 
                     # Client
-                    if ("დამკვეთი" in raw_c or "Client:" in raw_c) and ("ამინდი" not in raw_c):
+                    if ("დამკვეთი" in raw_c or "Client:" in raw_c) and ("ამინდი" not in raw_c and "Weather" not in raw_c):
                         set_cell_header_block(cell, "დამკვეთი / Client:", client_name)
 
                     # Date
-                    elif ("თარიღი" in raw_c or "Date:" in raw_c) and ("ამინდი" not in raw_c):
+                    elif ("თარიღი" in raw_c or "Date:" in raw_c) and ("ამინდი" not in raw_c and "Weather" not in raw_c):
                         set_cell_header_block(cell, "თარიღი / Date:", formatted_date)
 
                     # Location
@@ -347,30 +351,49 @@ if generate_btn:
                             for r in p.runs:
                                 r.font.color.rgb = RGBColor(255, 255, 255)
 
-            # B. WEATHER TABLE: UNIFORM SIZES ACROSS ALL TIME SLOTS
-            if ("Weather" in t_text or "ამინდი" in t_text) and any(h in t_text for h in ["9:00", "09:00", "9·00"]):
-                for r_idx, row in enumerate(table.rows):
-                    row_raw = " ".join([c.text for c in row.cells])
-                    if any(h in row_raw for h in ["9:00", "09:00", "9·00"]) and "14:00" in row_raw:
-                        # Row 1: Temperatures (10pt Bold) and Conditions (9pt Regular)
-                        if r_idx + 1 < len(table.rows):
-                            t_row = table.rows[r_idx + 1]
-                            if len(t_row.cells) >= 6:
-                                set_clean_weather_cell(t_row.cells[0], t9, font_size=10.0, bold=True)
-                                set_clean_weather_cell(t_row.cells[1], cond9, font_size=9.0, bold=False)
-                                set_clean_weather_cell(t_row.cells[2], t14, font_size=10.0, bold=True)
-                                set_clean_weather_cell(t_row.cells[3], cond14, font_size=9.0, bold=False)
-                                set_clean_weather_cell(t_row.cells[4], t18, font_size=10.0, bold=True)
-                                set_clean_weather_cell(t_row.cells[5], cond18, font_size=9.0, bold=False)
+            # B. WEATHER & WIND DIRECT REPLACEMENT (UNCONDITIONAL TAG SCANNER)
+            for row in table.rows:
+                row_raw = " ".join([c.text for c in row.cells])
 
-                        # Row 2: Wind speeds (Original icons in cells 1, 3, 5 left untouched)
-                        if r_idx + 2 < len(table.rows):
-                            w_row = table.rows[r_idx + 2]
-                            if len(w_row.cells) >= 5:
-                                set_clean_wind_cell(w_row.cells[0], w9)
-                                set_clean_wind_cell(w_row.cells[2], w14)
-                                set_clean_wind_cell(w_row.cells[4], w18)
-                        break
+                # Check 1: Scan cells directly for placeholders (guaranteed to replace {{ w9 }}, {{ w14 }}, {{ w18 }})
+                for cell in row.cells:
+                    c_txt = cell.text
+                    if re.search(r'\{\{\s*w9\s*\}\}', c_txt):
+                        set_clean_wind_cell(cell, w9)
+                    elif re.search(r'\{\{\s*w14\s*\}\}', c_txt):
+                        set_clean_wind_cell(cell, w14)
+                    elif re.search(r'\{\{\s*w18\s*\}\}', c_txt):
+                        set_clean_wind_cell(cell, w18)
+                    elif re.search(r'\{\{\s*t9\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, t9, font_size=10.0, bold=True)
+                    elif re.search(r'\{\{\s*t14\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, t14, font_size=10.0, bold=True)
+                    elif re.search(r'\{\{\s*t18\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, t18, font_size=10.0, bold=True)
+                    elif re.search(r'\{\{\s*cond9\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, cond9, font_size=9.0, bold=False)
+                    elif re.search(r'\{\{\s*cond14\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, cond14, font_size=9.0, bold=False)
+                    elif re.search(r'\{\{\s*cond18\s*\}\}', c_txt):
+                        set_clean_weather_cell(cell, cond18, font_size=9.0, bold=False)
+
+                # Check 2: Row matching by keyword (fallback if placeholders were already stripped)
+                if ("wind speed" in row_raw.lower() or "ქარის სიჩქარე" in row_raw) and len(row.cells) >= 5:
+                    set_clean_wind_cell(row.cells[0], w9)
+                    set_clean_wind_cell(row.cells[2], w14)
+                    set_clean_wind_cell(row.cells[4], w18)
+
+                if any(h in row_raw for h in ["9:00", "09:00", "9·00"]) and "14:00" in row_raw:
+                    r_idx = table.rows.index(row)
+                    if r_idx + 1 < len(table.rows):
+                        t_row = table.rows[r_idx + 1]
+                        if len(t_row.cells) >= 6:
+                            set_clean_weather_cell(t_row.cells[0], t9, font_size=10.0, bold=True)
+                            set_clean_weather_cell(t_row.cells[1], cond9, font_size=9.0, bold=False)
+                            set_clean_weather_cell(t_row.cells[2], t14, font_size=10.0, bold=True)
+                            set_clean_weather_cell(t_row.cells[3], cond14, font_size=9.0, bold=False)
+                            set_clean_weather_cell(t_row.cells[4], t18, font_size=10.0, bold=True)
+                            set_clean_weather_cell(t_row.cells[5], cond18, font_size=9.0, bold=False)
 
             # C. DAILY WORKS TABLE (HEADER RESTORED)
             if ("WBS" in t_text and ("სამუშაო" in t_text or "Code" in t_text)) or "{{ c1 }}" in t_text:
@@ -481,6 +504,28 @@ if generate_btn:
                     s_row.cells[3].text = str(sm["name"])
                     s_row.cells[4].text = str(sm["phone"])
                     s_row.cells[5].text = str(sm["mail"])
+
+        # 3. GLOBAL SWEEP: Replace any remaining placeholders anywhere in document
+        global_tag_map = {
+            r'\{\{\s*w9\s*\}\}': str(w9),
+            r'\{\{\s*w14\s*\}\}': str(w14),
+            r'\{\{\s*w18\s*\}\}': str(w18),
+            r'\{\{\s*t9\s*\}\}': str(t9),
+            r'\{\{\s*t14\s*\}\}': str(t14),
+            r'\{\{\s*t18\s*\}\}': str(t18),
+            r'\{\{\s*cond9\s*\}\}': str(cond9),
+            r'\{\{\s*cond14\s*\}\}': str(cond14),
+            r'\{\{\s*cond18\s*\}\}': str(cond18),
+        }
+        for p in doc.paragraphs:
+            for pat, val in global_tag_map.items():
+                replace_in_p(p, pat, val)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        for pat, val in global_tag_map.items():
+                            replace_in_p(p, pat, val)
 
         # Save Word bytes
         bio = io.BytesIO()
