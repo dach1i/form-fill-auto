@@ -66,6 +66,14 @@ def clone_row(table, source_row):
     table._tbl.append(tr_copy)
     return table.rows[-1]
 
+def safe_replace(p, old, new):
+    if old in p.text:
+        for r in p.runs:
+            if old in r.text:
+                r.text = r.text.replace(old, new)
+        if old in p.text:
+            p.text = p.text.replace(old, new)
+
 # Bulletproof placeholder replacement for paragraphs (handles split XML runs)
 def replace_in_p(p, pattern, replacement):
     if re.search(pattern, p.text):
@@ -131,8 +139,8 @@ def set_clean_wind_cell(cell, wind_val):
     r.font.size = Pt(8.5)
     r.font.bold = True
 
-# Generic compact cell populator for Data & Staff tables
-def populate_compact_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT):
+# Generic compact cell populator with color support
+def populate_compact_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0)):
     tc = cell._tc
     for child in list(tc):
         if not child.tag.endswith('tcPr'):
@@ -145,7 +153,7 @@ def populate_compact_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_
     r = p.add_run(str(text))
     r.font.size = Pt(font_size)
     r.font.bold = bold
-    r.font.color.rgb = RGBColor(0, 0, 0)
+    r.font.color.rgb = RGBColor(*color_rgb)
 
 WEATHER_CONDITIONS = [
     "",
@@ -156,7 +164,7 @@ WEATHER_CONDITIONS = [
     "თოვლიანი/snowy"
 ]
 
-# ==================== INPUT FIELDS ====================
+# ==================== INPUT FIELDS (EMPTY BY DEFAULT) ====================
 # 1. ძირითადი ინფორმაცია
 st.subheader("1. ძირითადი ინფორმაცია / General Info")
 col1, col2, col3, col4 = st.columns([1, 1, 1.5, 2])
@@ -301,8 +309,11 @@ if generate_btn:
         formatted_date = rep_date.strftime("%Y/%m/%d")
         final_doc_code = custom_doc_code.strip() if custom_doc_code.strip() else f"CMC-CMS-DPR-{rep_num or '001'}-{rep_date.strftime('%Y%m%d')}-Rev00"
 
-        # 1. Update Body Paragraphs
+        # 1. Update Body Paragraphs & Correct Misspellings
         for p in doc.paragraphs:
+            safe_replace(p, "სამუშაეობის", "სამუშაოების")
+            safe_replace(p, "სამუშაეობა", "სამუშაოები")
+
             if "CMC-CMS-DPR-" in p.text or "{{ doc_code }}" in p.text:
                 p.text = ""
                 r = p.add_run(final_doc_code)
@@ -323,6 +334,11 @@ if generate_btn:
             # A. HEADER CELLS (CLEAN SINGLE-BLOCK ASSIGNMENT, NO DUPLICATES)
             for row in table.rows:
                 for cell in row.cells:
+                    # Fix any template typos in this cell
+                    for p in cell.paragraphs:
+                        safe_replace(p, "სამუშაეობის", "სამუშაოების")
+                        safe_replace(p, "სამუშაეობა", "სამუშაოები")
+
                     raw_c = cell.text.strip()
 
                     # Client
@@ -373,7 +389,6 @@ if generate_btn:
             for r_idx, row in enumerate(table.rows):
                 row_raw = " ".join([c.text for c in row.cells])
 
-                # Direct scan for tags
                 for cell in row.cells:
                     c_txt = cell.text
                     if re.search(r'\{\{\s*w9\s*\}\}', c_txt):
@@ -395,7 +410,6 @@ if generate_btn:
                     elif re.search(r'\{\{\s*cond18\s*\}\}', c_txt):
                         set_clean_weather_cell(cell, cond18, font_size=8.5, bold=False)
 
-                # Fallback row matching
                 if ("wind speed" in row_raw.lower() or "ქარის სიჩქარე" in row_raw) and len(row.cells) >= 5:
                     set_clean_wind_cell(row.cells[0], w9)
                     set_clean_wind_cell(row.cells[2], w14)
@@ -412,8 +426,8 @@ if generate_btn:
                             set_clean_weather_cell(t_row.cells[4], t18, font_size=9.5, bold=True)
                             set_clean_weather_cell(t_row.cells[5], cond18, font_size=8.5, bold=False)
 
-            # C. DAILY WORKS TABLE (HEADER COMPACTED & ROW PADDING BALANCED)
-            if ("WBS" in t_text and ("სამუშაო" in t_text or "Code" in t_text)) or "{{ c1 }}" in t_text:
+            # C. DAILY WORKS TABLE (HEADERS 100% PURE WHITE ON DARK BACKGROUND)
+            if ("WBS" in t_text and ("სამუშაო" in t_text or "სამუშაე" in t_text or "Code" in t_text)) or "{{ c1 }}" in t_text:
                 header_labels = [
                     ("№", WD_ALIGN_PARAGRAPH.CENTER),
                     ("შემსრულებელი\nContractor", WD_ALIGN_PARAGRAPH.CENTER),
@@ -422,23 +436,24 @@ if generate_btn:
                     ("სამუშაოს დასახელება\nWork Description", WD_ALIGN_PARAGRAPH.CENTER),
                     ("აღწერა / დეტალები\nDescription", WD_ALIGN_PARAGRAPH.CENTER)
                 ]
+                # Headers formatted in PURE WHITE (RGB 255, 255, 255)
                 for c_idx, (lbl, align) in enumerate(header_labels):
-                    populate_compact_cell(table.rows[0].cells[c_idx], lbl, font_size=8.0, bold=True, align=align)
+                    populate_compact_cell(table.rows[0].cells[c_idx], lbl, font_size=8.0, bold=True, align=align, color_rgb=(255, 255, 255))
 
                 while len(table.rows) > 1:
                     table._tbl.remove(table.rows[-1]._tr)
 
                 for tsk in tasks:
                     new_r = table.add_row()
-                    populate_compact_cell(new_r.cells[0], str(tsk["num"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(new_r.cells[1], str(tsk["contractor"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(new_r.cells[2], str(tsk["manpower"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(new_r.cells[3], str(tsk["wbs"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(new_r.cells[4], str(tsk["name"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.LEFT)
-                    populate_compact_cell(new_r.cells[5], str(tsk["desc"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT)
+                    populate_compact_cell(new_r.cells[0], str(tsk["num"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
+                    populate_compact_cell(new_r.cells[1], str(tsk["contractor"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
+                    populate_compact_cell(new_r.cells[2], str(tsk["manpower"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
+                    populate_compact_cell(new_r.cells[3], str(tsk["wbs"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
+                    populate_compact_cell(new_r.cells[4], str(tsk["name"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0))
+                    populate_compact_cell(new_r.cells[5], str(tsk["desc"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0))
 
             # D. PHOTOS TABLE
-            if "დღიური სამუშაოების ამსახველი ფოტომასალა" in t_text or "სამუშაო პროცესი" in t_text:
+            if "ფოტომასალა" in t_text or "სამუშაო პროცესი" in t_text or "სამუშაეობის" in t_text:
                 num_uploaded = len(photos_data)
                 process_rows = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
 
@@ -480,6 +495,9 @@ if generate_btn:
                         t_cell = t_row.cells[0]
                         t_cell.merge(t_row.cells[1])
                         t_cell.text = f"სამუშაო პროცესი / Work Process №{proc_counter}"
+                        for r in t_cell.paragraphs[0].runs:
+                            r.font.color.rgb = RGBColor(255, 255, 255)
+                            r.font.bold = True
                         if proc_counter == 4 or (proc_counter - 4) % 3 == 0:
                             t_cell.paragraphs[0].paragraph_format.page_break_before = True
 
@@ -499,7 +517,7 @@ if generate_btn:
 
                         proc_counter += 1
 
-            # E. KEY STAFF TABLE (COMPACT PROPORTIONAL FONTS)
+            # E. KEY STAFF TABLE
             if "სამშენებლო მოედანზე მომუშავე კომპანიები" in t_text or "Key Staff" in t_text:
                 while len(table.rows) > 2:
                     table._tbl.remove(table.rows[-1]._tr)
@@ -513,7 +531,7 @@ if generate_btn:
                     populate_compact_cell(s_row.cells[4], str(sm["phone"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
                     populate_compact_cell(s_row.cells[5], str(sm["mail"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
 
-        # 3. GLOBAL SWEEP: Replace any remaining placeholders anywhere in document
+        # 3. GLOBAL SWEEP: Replace any remaining placeholders & misspellings anywhere in document
         global_tag_map = {
             r'\{\{\s*w9\s*\}\}': str(w9),
             r'\{\{\s*w14\s*\}\}': str(w14),
@@ -524,6 +542,8 @@ if generate_btn:
             r'\{\{\s*cond9\s*\}\}': str(cond9),
             r'\{\{\s*cond14\s*\}\}': str(cond14),
             r'\{\{\s*cond18\s*\}\}': str(cond18),
+            r'სამუშაეობის': 'სამუშაოების',
+            r'სამუშაეობა': 'სამუშაოები',
         }
         for p in doc.paragraphs:
             for pat, val in global_tag_map.items():
