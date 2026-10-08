@@ -7,6 +7,7 @@ import io
 import os
 import copy
 import json
+import subprocess
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
 st.title("🏗️ ყოველდღიური რეპორტის გენერატორი (DPR)")
@@ -72,7 +73,7 @@ def safe_replace(p, old, new):
         if old in p.text:
             p.text = p.text.replace(old, new)
 
-# Clears the cell and writes ONE clean header block (eliminates duplicates)
+# Clears the entire cell and writes ONE clean header block with pure white text
 def set_cell_header_block(cell, label, value):
     tc = cell._tc
     for child in list(tc):
@@ -92,7 +93,7 @@ def set_cell_header_block(cell, label, value):
     r2.font.size = Pt(9.5)
     r2.font.bold = True
 
-# Weather cell formatter: ensures identical font size across all columns
+# Weather cell formatter: ensures 100% uniform sizing across all three slots
 def set_clean_weather_cell(cell, text, font_size=9.0, bold=False):
     tc = cell._tc
     for child in list(tc):
@@ -208,7 +209,7 @@ for i in range(int(task_count)):
 
 st.divider()
 
-# 4. ფოტოები (MAX VALUE = 100)
+# 4. ფოტოები (Supports up to 100 photos)
 st.subheader("4. სამუშაოების ფოტომასალა / Photos & Descriptions")
 st.info("💡 თითო გვერდზე თავსდება 6 ფოტო. 7+ ფოტოს შემთხვევაში ავტომატურად შეიქმნება ახალი სრული გვერდი (მაქსიმუმ 100 ფოტო).")
 
@@ -230,7 +231,7 @@ st.divider()
 
 # 5. პერსონალი
 st.subheader("5. სამშენებლო მოედანზე მომუშავე პერსონალი / Key Staff")
-st.caption("ყველა ძველი თანამშრომელი წაშლილია. ჩაწერეთ მხოლოდ დღეს მყოფი თანამშრომლები.")
+st.caption("ჩაწერეთ მხოლოდ დღეს მყოფი თანამშრომლები.")
 saved_staff_count = int(draft.get("staff_count", 2))
 staff_count = st.number_input("თანამშრომლების რაოდენობა", min_value=0, max_value=30, value=saved_staff_count)
 
@@ -248,7 +249,7 @@ for si in range(int(staff_count)):
     s_mail = sc5.text_input("ელ. ფოსტა", value=st_prev.get("mail", "m.akhaladze@cmc.ge" if si == 0 else "l.samkharadze@bkconstruction.ge"), key=f"st_m_{si}")
     staff_members.append({"num": si+1, "comp": s_comp, "pos": s_pos, "name": s_name, "phone": s_phone, "mail": s_mail})
 
-# ავტომატური შენახვა
+# Silent Autosave
 current_state_to_save = {
     "rep_num": rep_num,
     "rep_date": rep_date.strftime("%Y-%m-%d"),
@@ -351,7 +352,7 @@ if generate_btn:
                 for r_idx, row in enumerate(table.rows):
                     row_raw = " ".join([c.text for c in row.cells])
                     if any(h in row_raw for h in ["9:00", "09:00", "9·00"]) and "14:00" in row_raw:
-                        # Row 1: Temperatures and Conditions (exact same size across all 3)
+                        # Row 1: Temperatures (10pt Bold) and Conditions (9pt Regular)
                         if r_idx + 1 < len(table.rows):
                             t_row = table.rows[r_idx + 1]
                             if len(t_row.cells) >= 6:
@@ -481,47 +482,81 @@ if generate_btn:
                     s_row.cells[4].text = str(sm["phone"])
                     s_row.cells[5].text = str(sm["mail"])
 
-        # Save Word
+        # Save Word bytes
         bio = io.BytesIO()
         doc.save(bio)
         st.session_state["docx_bytes"] = bio.getvalue()
         st.session_state["doc_code"] = final_doc_code
 
-        # PDF Conversion
-        temp_doc_name = "temp_" + final_doc_code + ".docx"
-        temp_pdf_name = final_doc_code + ".pdf"
+        # ==================== PDF CONVERSION ENGINE ====================
+        temp_doc_name = f"temp_{final_doc_code}.docx"
+        temp_pdf_name = f"{final_doc_code}.pdf"
         abs_docx = os.path.abspath(temp_doc_name)
         abs_pdf = os.path.abspath(temp_pdf_name)
 
         with open(abs_docx, "wb") as f_tmp:
             f_tmp.write(bio.getvalue())
 
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            from docx2pdf import convert
-            convert(abs_docx, abs_pdf)
-            with open(abs_pdf, "rb") as f_pdf:
-                st.session_state["pdf_bytes"] = f_pdf.read()
-        except Exception:
-            try:
-                import win32com.client
-                word_app = win32com.client.DispatchEx("Word.Application")
-                word_app.Visible = False
-                word_app.DisplayAlerts = False
-                w_doc = word_app.Documents.Open(abs_docx)
-                w_doc.SaveAs(abs_pdf, FileFormat=17)
-                w_doc.Close()
-                word_app.Quit()
-                with open(abs_pdf, "rb") as f_pdf:
-                    st.session_state["pdf_bytes"] = f_pdf.read()
-            except Exception:
-                st.session_state["pdf_bytes"] = None
+        pdf_converted = False
+        conversion_error = None
 
+        # 1. Try LibreOffice (Linux / Streamlit Cloud / local LibreOffice)
+        try:
+            cmd = ["soffice", "--headless", "--convert-to", "pdf", abs_docx, "--outdir", os.path.dirname(abs_docx)]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
+            candidate_pdf = abs_docx.rsplit(".", 1)[0] + ".pdf"
+            if os.path.exists(candidate_pdf):
+                with open(candidate_pdf, "rb") as f_pdf:
+                    st.session_state["pdf_bytes"] = f_pdf.read()
+                pdf_converted = True
+                if os.path.exists(candidate_pdf):
+                    os.remove(candidate_pdf)
+        except Exception as e:
+            conversion_error = e
+
+        # 2. Try Windows Microsoft Word (Local Windows PC)
+        if not pdf_converted:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                from docx2pdf import convert
+                convert(abs_docx, abs_pdf)
+                if os.path.exists(abs_pdf):
+                    with open(abs_pdf, "rb") as f_pdf:
+                        st.session_state["pdf_bytes"] = f_pdf.read()
+                    pdf_converted = True
+            except Exception:
+                try:
+                    import win32com.client
+                    word_app = win32com.client.DispatchEx("Word.Application")
+                    word_app.Visible = False
+                    word_app.DisplayAlerts = False
+                    w_doc = word_app.Documents.Open(abs_docx)
+                    w_doc.SaveAs(abs_pdf, FileFormat=17)
+                    w_doc.Close()
+                    word_app.Quit()
+                    if os.path.exists(abs_pdf):
+                        with open(abs_pdf, "rb") as f_pdf:
+                            st.session_state["pdf_bytes"] = f_pdf.read()
+                        pdf_converted = True
+                except Exception as e2:
+                    conversion_error = e2
+                    st.session_state["pdf_bytes"] = None
+
+        # Clean up temporary disk files
         if os.path.exists(abs_docx):
-            os.remove(abs_docx)
+            try:
+                os.remove(abs_docx)
+            except Exception:
+                pass
         if os.path.exists(abs_pdf):
-            os.remove(abs_pdf)
+            try:
+                os.remove(abs_pdf)
+            except Exception:
+                pass
+
+        if not pdf_converted:
+            st.warning(f"💡 შენიშვნა: PDF ვერ დაგენერირდა ({conversion_error}). გადმოწერეთ Word ფაილი.")
 
     except Exception as e:
         st.error(f"შეცდომა რეპორტის შექმნისას: {e}")
@@ -535,7 +570,7 @@ if st.session_state["docx_bytes"] is not None:
     b_col1.download_button(
         label="📥 1. გადმოწერეთ Word (.docx)",
         data=st.session_state["docx_bytes"],
-        file_name=d_code + ".docx",
+        file_name=f"{d_code}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         use_container_width=True
     )
@@ -544,9 +579,9 @@ if st.session_state["docx_bytes"] is not None:
         b_col2.download_button(
             label="🖨️ 2. გადმოწერეთ დასაბეჭდი PDF (.pdf)",
             data=st.session_state["pdf_bytes"],
-            file_name=d_code + ".pdf",
+            file_name=f"{d_code}.pdf",
             mime="application/pdf",
             use_container_width=True
         )
     else:
-        b_col2.info("💡 PDF-ის პირდაპირი გადმოწერისთვის დარწმუნდით, რომ Microsoft Word დაინსტალირებულია.")
+        b_col2.info("💡 PDF ღილაკისთვის Streamlit Cloud-ზე GitHub რეპოზიტორიაში დაამატეთ `packages.txt` ჩანაწერით: `libreoffice`.")
