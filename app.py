@@ -3,6 +3,8 @@ import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 from datetime import datetime
 from PIL import Image
 import io
@@ -144,6 +146,14 @@ def clear_cell_completely(cell):
             tc.remove(child)
     cell.add_paragraph()
 
+# Explicitly enforces dark background (#262626) on table cells
+def set_dark_cell_background(cell, hex_color="262626"):
+    tcPr = cell._tc.get_or_add_tcPr()
+    for shd in tcPr.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd'):
+        tcPr.remove(shd)
+    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>')
+    tcPr.append(shd)
+
 def safe_replace(p, old, new):
     if old in p.text:
         for r in p.runs:
@@ -152,33 +162,12 @@ def safe_replace(p, old, new):
         if old in p.text:
             p.text = p.text.replace(old, str(new))
 
-# Forces a table row to start at the top of a new page (Page 2)
-def force_row_to_new_page(row):
-    for cell in row.cells:
-        for p in cell.paragraphs:
-            p.paragraph_format.page_break_before = True
-            p.paragraph_format.keep_with_next = True
-            pPr = p._p.get_or_add_pPr()
-            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pageBreakBefore') is None:
-                pPr.append(docx.oxml.OxmlElement('w:pageBreakBefore'))
-            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}keepNext') is None:
-                pPr.append(docx.oxml.OxmlElement('w:keepNext'))
-    trPr = row._tr.get_or_add_trPr()
-    if trPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cantSplit') is None:
-        trPr.append(docx.oxml.OxmlElement('w:cantSplit'))
+# Sets clean page break on first cell of row only (prevents duplicate blank pages)
+def set_clean_page_break_on_row(row):
+    if len(row.cells) > 0 and len(row.cells[0].paragraphs) > 0:
+        p = row.cells[0].paragraphs[0]
+        p.paragraph_format.page_break_before = True
 
-def keep_row_with_next(row):
-    for cell in row.cells:
-        for p in cell.paragraphs:
-            p.paragraph_format.keep_with_next = True
-            pPr = p._p.get_or_add_pPr()
-            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}keepNext') is None:
-                pPr.append(docx.oxml.OxmlElement('w:keepNext'))
-    trPr = row._tr.get_or_add_trPr()
-    if trPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cantSplit') is None:
-        trPr.append(docx.oxml.OxmlElement('w:cantSplit'))
-
-# Standard 11pt cell populator with 100% horizontal & vertical centering
 def populate_cell(cell, text, font_size=11.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
     clear_cell_completely(cell)
     try:
@@ -195,8 +184,8 @@ def populate_cell(cell, text, font_size=11.0, bold=False, align=WD_ALIGN_PARAGRA
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# Scaled centered pictures
-def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.95):
+# Calibrated to 1.70" max height so all 6 photos fit on Page 2 without spilling onto Page 3
+def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.70):
     clear_cell_completely(cell)
     try:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -204,8 +193,8 @@ def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.95):
         pass
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(1)
-    p.paragraph_format.space_after = Pt(1)
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
     p.paragraph_format.line_spacing = 1.0
 
     try:
@@ -401,15 +390,16 @@ if generate_btn:
         for table in doc.tables:
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
 
-            # A. HEADER BANNER: Exact 11pt & 14pt Formatting with Pure White text
+            # A. HEADER BANNER: Exact 11pt, 14pt, Solid Dark Background (#262626), 100% Pure White Text
             if "Daily Progress Report" in t_text or "ყოველდღიური რეპორტი" in t_text or "სითი მოლი" in t_text:
                 for row in table.rows:
                     for cell in row.cells:
                         c_raw = cell.text
 
-                        # 1. Report Title & Progress Report Number -> 14pt Pure White
+                        # 1. Title & Report Number -> 14pt Pure White on Dark Background
                         if "Daily Progress Report" in c_raw or "ყოველდღიური რეპორტი" in c_raw:
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             try:
                                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                             except Exception:
@@ -428,6 +418,7 @@ if generate_btn:
 
                         elif c_raw.strip() in ["007", "001", "111", "{{ rep_num }}", str(rep_num)]:
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             try:
                                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                             except Exception:
@@ -439,9 +430,10 @@ if generate_btn:
                             r_num.font.bold = True
                             r_num.font.color.rgb = RGBColor(255, 255, 255)
 
-                        # 2. Project Title -> 11pt Pure White
+                        # 2. Project Title -> 11pt Pure White on Dark Background
                         elif "სითი მოლი" in c_raw or "საბურთალო" in c_raw:
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             try:
                                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                             except Exception:
@@ -453,9 +445,10 @@ if generate_btn:
                             r.font.bold = True
                             r.font.color.rgb = RGBColor(255, 255, 255)
 
-                        # 3. Client & Location Block -> 11pt Pure White
+                        # 3. Client & Location -> 11pt Pure White on Dark Background
                         elif ("დამკვეთი" in c_raw or "Client:" in c_raw) and ("Weather" not in c_raw and "ამინდი" not in c_raw):
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             p = cell.paragraphs[0]
                             p.paragraph_format.space_before = Pt(0)
                             p.paragraph_format.space_after = Pt(2)
@@ -480,9 +473,10 @@ if generate_btn:
                             r4.font.bold = True
                             r4.font.color.rgb = RGBColor(255, 255, 255)
 
-                        # 4. Date & Prepared by Block -> 11pt Pure White (Prepared by now 100% WHITE!)
+                        # 4. Date & Prepared by -> 11pt Pure White on Dark Background (Prepared by 100% WHITE)
                         elif ("თარიღი" in c_raw or "Date:" in c_raw) and ("Weather" not in c_raw and "ამინდი" not in c_raw):
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             p = cell.paragraphs[0]
                             p.paragraph_format.space_before = Pt(0)
                             p.paragraph_format.space_after = Pt(2)
@@ -509,15 +503,15 @@ if generate_btn:
 
                         elif "CMC-CMS-DPR-" in c_raw or "{{ doc_code }}" in c_raw:
                             clear_cell_completely(cell)
+                            set_dark_cell_background(cell, "262626")
                             p = cell.paragraphs[0]
                             r = p.add_run(final_doc_code)
                             r.font.size = Pt(11)
                             r.font.bold = True
                             r.font.color.rgb = RGBColor(255, 255, 255)
 
-            # B. WEATHER TABLE: Remove all 3 bugged icons & format in clean 11pt
+            # B. WEATHER TABLE: Remove bugged icons & format 11pt cleanly
             if ("Weather" in t_text or "ამინდი" in t_text) and any(h in t_text for h in ["9:00", "09:00"]):
-                # 1. PURGE ALL DRAWINGS/PICTURES FROM WEATHER TABLE
                 for d in table._tbl.xpath('.//w:drawing | .//w:pict | .//w:object'):
                     try:
                         d.getparent().remove(d)
@@ -527,9 +521,10 @@ if generate_btn:
                 for r_idx, row in enumerate(table.rows):
                     row_txt = " ".join([c.text for c in row.cells])
 
-                    # Title "ამინდი / Weather"
+                    # Title "ამინდი / Weather" -> Dark Background + 11pt Bold White
                     if "ამინდი" in row_txt and "Weather" in row_txt and r_idx == 0:
                         for cell in row.cells:
+                            set_dark_cell_background(cell, "262626")
                             for p in cell.paragraphs:
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 for r in p.runs:
@@ -537,7 +532,7 @@ if generate_btn:
                                     r.font.bold = True
                                     r.font.color.rgb = RGBColor(255, 255, 255)
 
-                    # Hours row "9:00", "14:00", "18:00"
+                    # Hours row: 11pt Bold Black
                     if any(h in row_txt for h in ["9:00", "09:00"]) and "14:00" in row_txt:
                         for cell in row.cells:
                             for p in cell.paragraphs:
@@ -545,8 +540,9 @@ if generate_btn:
                                 for r in p.runs:
                                     r.font.size = Pt(11)
                                     r.font.bold = True
+                                    r.font.color.rgb = RGBColor(0, 0, 0)
 
-                        # Row right below: Temperatures & Conditions
+                        # Temperatures & Conditions row: 11pt Black
                         if r_idx + 1 < len(table.rows):
                             t_row = table.rows[r_idx + 1]
                             weather_slots = [
@@ -558,17 +554,14 @@ if generate_btn:
                                 if c_i < len(t_row.cells):
                                     populate_cell(t_row.cells[c_i], val, font_size=11.0, bold=is_bold, align=WD_ALIGN_PARAGRAPH.CENTER)
 
-                        # Row 2 below: Wind Speed row (Merge icon cells & remove black shading)
+                        # Wind Speed row: Remove black shading, merge cells, format 11pt cleanly
                         if r_idx + 2 < len(table.rows):
                             w_row = table.rows[r_idx + 2]
-                            
-                            # Remove black shading from all cells
                             for cell in w_row.cells:
                                 tcPr = cell._tc.get_or_add_tcPr()
                                 for shd in tcPr.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd'):
                                     tcPr.remove(shd)
 
-                            # If 6 separate cells, merge adjacent pairs so wind speed spans across cleanly
                             seen_tcs = []
                             for c in w_row.cells:
                                 if c._tc not in seen_tcs:
@@ -584,9 +577,6 @@ if generate_btn:
 
                             def set_wind_block(cell, val):
                                 clear_cell_completely(cell)
-                                tcPr = cell._tc.get_or_add_tcPr()
-                                for shd in tcPr.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd'):
-                                    tcPr.remove(shd)
                                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                                 p = cell.paragraphs[0]
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -637,7 +627,7 @@ if generate_btn:
 
                 if photo_b_idx is not None:
                     photo_banner_row = table.rows[photo_b_idx]
-                    force_row_to_new_page(photo_banner_row)
+                    set_clean_page_break_on_row(photo_banner_row)
 
                     for r_i in range(works_h_idx + 1, photo_b_idx):
                         if sample_task_tr is None:
@@ -689,14 +679,21 @@ if generate_btn:
                                 populate_cell(new_row.cells[c_idx], val, font_size=11.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
                         table._tbl.append(new_tr)
 
-            # D. PHOTOS TABLE: Force Banner to Page 2 & Scaled Centered Pictures
+            # D. PHOTOS TABLE: Force to Page 2, 1.70" max height (Never overflows to Page 3)
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
                 num_uploaded = len(photos_data)
                 
                 for row in table.rows:
                     r_txt = " ".join([c.text for c in row.cells])
                     if "ფოტომასალა" in r_txt or "Work Progress Photos" in r_txt:
-                        force_row_to_new_page(row)
+                        set_clean_page_break_on_row(row)
+                        for cell in row.cells:
+                            set_dark_cell_background(cell, "262626")
+                            for p in cell.paragraphs:
+                                for r in p.runs:
+                                    r.font.size = Pt(11)
+                                    r.font.bold = True
+                                    r.font.color.rgb = RGBColor(255, 255, 255)
                         break
 
                 wp_idx = None
@@ -704,7 +701,6 @@ if generate_btn:
                     r_txt = " ".join([c.text for c in row.cells])
                     if "სამუშაო პროცესი" in r_txt or "Work Process" in r_txt:
                         wp_idx = r_idx
-                        keep_row_with_next(row)
                         break
 
                 if wp_idx is not None:
@@ -738,58 +734,12 @@ if generate_btn:
                                 clear_cell_completely(p_row.cells[1])
                                 clear_cell_completely(c_row.cells[1])
 
-                    # Extra Photos (> 6)
-                    if num_uploaded > 6:
-                        remaining_photos = photos_data[6:]
-                        proc_counter = 4
-                        sample_header_row = table.rows[wp_idx]
-                        sample_photo_row = table.rows[wp_idx + 1]
-                        sample_cap_row = table.rows[wp_idx + 2]
-
-                        hs_row = None
-                        for r_idx in range(wp_idx + 7, len(table.rows)):
-                            r_txt = " ".join([c.text for c in table.rows[r_idx].cells])
-                            if "Health & Safety" in r_txt or "უსაფრთხოების" in r_txt:
-                                hs_row = table.rows[r_idx]
-                                break
-
-                        for pair_start in range(0, len(remaining_photos), 2):
-                            new_h_tr = copy.deepcopy(sample_header_row._tr)
-                            new_h_row = docx.table._Row(new_h_tr, table)
-                            t_cell = new_h_row.cells[0]
-                            if len(new_h_row.cells) > 1:
-                                t_cell.merge(new_h_row.cells[1])
-                            t_cell.text = f"სამუშაო პროცესი / Work Process №{proc_counter}"
-                            for r in t_cell.paragraphs[0].runs:
-                                r.font.bold = True
-                            if proc_counter == 4 or (proc_counter - 4) % 3 == 0:
-                                t_cell.paragraphs[0].paragraph_format.page_break_before = True
-
-                            new_p_tr = copy.deepcopy(sample_photo_row._tr)
-                            new_p_row = docx.table._Row(new_p_tr, table)
-                            new_c_tr = copy.deepcopy(sample_cap_row._tr)
-                            new_c_row = docx.table._Row(new_c_tr, table)
-
-                            insert_centered_picture(new_p_row.cells[0], remaining_photos[pair_start]["file"].getvalue())
-                            populate_cell(new_c_row.cells[0], remaining_photos[pair_start]["caption"], font_size=9.0, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                            if pair_start + 1 < len(remaining_photos):
-                                insert_centered_picture(new_p_row.cells[1], remaining_photos[pair_start + 1]["file"].getvalue())
-                                populate_cell(new_c_row.cells[1], remaining_photos[pair_start + 1]["caption"], font_size=9.0, align=WD_ALIGN_PARAGRAPH.CENTER)
-                            else:
-                                clear_cell_completely(new_p_row.cells[1])
-                                clear_cell_completely(new_c_row.cells[1])
-
-                            if hs_row is not None:
-                                hs_row._tr.addprevious(new_h_tr)
-                                hs_row._tr.addprevious(new_p_tr)
-                                hs_row._tr.addprevious(new_c_tr)
-                            else:
-                                table._tbl.append(new_h_tr)
-                                table._tbl.append(new_p_tr)
-                                table._tbl.append(new_c_tr)
-
-                            proc_counter += 1
+                    # Clean transition to Page 3: Set page break directly on Health & Safety row
+                    for r_idx in range(wp_idx + 7, len(table.rows)):
+                        r_txt = " ".join([c.text for c in table.rows[r_idx].cells])
+                        if "Health & Safety" in r_txt or "უსაფრთხოების" in r_txt:
+                            set_clean_page_break_on_row(table.rows[r_idx])
+                            break
 
             # E. KEY STAFF TABLE: 100% Centered
             staff_h_idx = None
@@ -819,11 +769,11 @@ if generate_btn:
                     for r_i in range(staff_h_idx + 1, sig_r_idx):
                         if sample_staff_tr is None:
                             sample_staff_tr = copy.deepcopy(table.rows[r_i]._tr)
-                        task_rows_to_delete.append(table.rows[r_i])
+                        staff_rows_to_delete.append(table.rows[r_i])
                     if sample_staff_tr is None:
                         sample_staff_tr = copy.deepcopy(table.rows[staff_h_idx]._tr)
 
-                    for r in task_rows_to_delete:
+                    for r in staff_rows_to_delete:
                         table._tbl.remove(r._tr)
 
                     if staff_members:
@@ -880,7 +830,7 @@ if generate_btn:
                             clear_cell_completely(c)
                         table._tbl.append(new_tr)
 
-        # Remove all floating table positions
+        # Remove floating table positions
         for tblp in doc._body._element.xpath('.//w:tblpPr'):
             tblp.getparent().remove(tblp)
 
