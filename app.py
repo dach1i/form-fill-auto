@@ -2,12 +2,12 @@ import streamlit as st
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from datetime import datetime
 import io
 import os
 import copy
 import json
-import re
 import subprocess
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
@@ -15,13 +15,13 @@ st.title("🏗️ ყოველდღიური რეპორტის გ
 st.caption("სითი მოლი საბურთალო — სრული ავტომატიზაცია")
 
 target_file = None
-for fname in ["template.docx", "CMC-CMS-DPR-001-20261001-Rev00.docx"]:
+for fname in ["template.docx", "template_2.docx", "CMC-CMS-DPR-007-20261008-Rev00.docx"]:
     if os.path.exists(fname):
         target_file = fname
         break
 
 if not target_file:
-    st.error("ვერ მოიძებნა 'template.docx' ან 'CMC-CMS-DPR-001-20261001-Rev00.docx'!")
+    st.error("ვერ მოიძებნა 'template.docx'!")
     st.stop()
 
 # ==================== AUTOSAVE DRAFT MANAGER ====================
@@ -47,11 +47,81 @@ draft = load_draft()
 
 with st.sidebar:
     st.header("⚙️ მართვის პანელი")
-    if st.button("🔄 ახალი რეპორტის დაწყება (Reset Draft)", use_container_width=True):
+    
+    col_sb1, col_sb2 = st.columns(2)
+    if col_sb1.button("⚡ Auto-Fill Sample", use_container_width=True):
+        sample_data = {
+            "rep_num": "008",
+            "rep_date": datetime.today().strftime("%Y-%m-%d"),
+            "prepared_by": "მურად ახალაძე",
+            "custom_doc_code": f"CMC-CMS-DPR-008-{datetime.today().strftime('%Y%m%d')}-Rev00",
+            "client_name": "შპს „აი ჯი დეველოფმენტ ჯორჯია“",
+            "site_location": "ქ.თბილისი ქავთარაძის ქ. №1",
+            "t9": "+21°C", "w9": "1.8 მ/წ", "cond9": "მზიანი/sunny",
+            "t14": "+24°C", "w14": "2.1 მ/წ", "cond14": "ნაწ. მოღრ./p. cloudy",
+            "t18": "+22°C", "w18": "1.5 მ/წ", "cond18": "მზიანი/sunny",
+            "task_count": 2,
+            "tasks": [
+                {
+                    "num": 1,
+                    "contractor": "ბკ ქონსთრაქშენი",
+                    "manpower": "12",
+                    "wbs": "WBS-01",
+                    "name": "შპუნტების მონტაჟი",
+                    "desc": "მიმდინარეობს E ბლოკში შპუნტების მონტაჟი"
+                },
+                {
+                    "num": 2,
+                    "contractor": "ბკ ქონსთრაქშენი",
+                    "manpower": "8",
+                    "wbs": "WBS-02",
+                    "name": "ხიმინჯის გაბურღვა",
+                    "desc": "მიმდინარეობს E ბლოკში ხიმინჯების გაბურღვა"
+                }
+            ],
+            "photo_slots_count": 6,
+            "captions": {
+                "0": "სურ./Pic. 1 შპუნტების მონტაჟი",
+                "1": "სურ./Pic. 2 შპუნტების მონტაჟი"
+            },
+            "staff_count": 3,
+            "staff": [
+                {
+                    "num": 1,
+                    "comp": "სიემსი",
+                    "pos": "პროექტის მენეჯერი",
+                    "name": "ავთო ჯაბაური",
+                    "phone": "577 252 282",
+                    "mail": "a.jabauri@cmc.ge"
+                },
+                {
+                    "num": 2,
+                    "comp": "სიემსი",
+                    "pos": "ობიექტის ზედამხედველი",
+                    "name": "მურად ახალაძე",
+                    "phone": "598 109 291",
+                    "mail": "m.akhaladze@cmc.ge"
+                },
+                {
+                    "num": 3,
+                    "comp": "ბკ ქონსთრაქშენი",
+                    "pos": "ობიექტის ზედამხედველი",
+                    "name": "ლაშა სამხარაძე",
+                    "phone": "598 250 660",
+                    "mail": "l.samkharadze@bkconstruction.ge"
+                }
+            ]
+        }
+        save_draft(sample_data)
+        st.session_state.clear()
+        st.rerun()
+
+    if col_sb2.button("🔄 Reset Draft", use_container_width=True):
         if os.path.exists(AUTOSAVE_FILE):
             os.remove(AUTOSAVE_FILE)
         st.session_state.clear()
         st.rerun()
+
     st.caption("ყველა ცვლილება ინახება ავტომატურად.")
 
 if "docx_bytes" not in st.session_state:
@@ -66,94 +136,72 @@ def clone_row(table, source_row):
     table._tbl.append(tr_copy)
     return table.rows[-1]
 
+def clear_cell_completely(cell):
+    tc = cell._tc
+    for child in list(tc):
+        if not child.tag.endswith('tcPr'):
+            tc.remove(child)
+    cell.add_paragraph()
+
 def safe_replace(p, old, new):
     if old in p.text:
         for r in p.runs:
             if old in r.text:
-                r.text = r.text.replace(old, new)
+                r.text = r.text.replace(old, str(new))
         if old in p.text:
-            p.text = p.text.replace(old, new)
+            p.text = p.text.replace(old, str(new))
 
-# Bulletproof placeholder replacement for paragraphs (handles split XML runs)
-def replace_in_p(p, pattern, replacement):
-    if re.search(pattern, p.text):
-        matched = False
-        for r in p.runs:
-            if re.search(pattern, r.text):
-                r.text = re.sub(pattern, str(replacement), r.text)
-                matched = True
-        if not matched and re.search(pattern, p.text):
-            p.text = re.sub(pattern, str(replacement), p.text)
-
-# Sets a compact, single-block header cell to avoid duplicates and container stretching
-def set_cell_header_block(cell, label, value):
-    tc = cell._tc
-    for child in list(tc):
-        if not child.tag.endswith('tcPr'):
-            tc.remove(child)
-    p = cell.add_paragraph()
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
+# ტექსტური უჯრედების ცენტრირება
+def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
+    clear_cell_completely(cell)
+    try:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    except Exception:
+        pass
+    p = cell.paragraphs[0]
+    p.alignment = align
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after = Pt(2)
     p.paragraph_format.line_spacing = 1.05
-    
-    r1 = p.add_run(f"{label}\n")
-    r1.font.color.rgb = RGBColor(255, 255, 255)
-    r1.font.size = Pt(7.5)
-    r1.font.bold = False
-    
-    r2 = p.add_run(str(value) if value else "-")
-    r2.font.color.rgb = RGBColor(255, 255, 255)
-    r2.font.size = Pt(8.5)
-    r2.font.bold = True
-
-# Weather cell formatter: strict padding and proportional font sizes
-def set_clean_weather_cell(cell, text, font_size=8.5, bold=False):
-    tc = cell._tc
-    for child in list(tc):
-        if not child.tag.endswith('tcPr'):
-            tc.remove(child)
-    p = cell.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.0
-    r = p.add_run(str(text))
+    r = p.add_run(str(text) if text is not None else "")
     r.font.size = Pt(font_size)
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# Wind speed cell formatter
-def set_clean_wind_cell(cell, wind_val):
-    tc = cell._tc
-    for child in list(tc):
-        if not child.tag.endswith('tcPr'):
-            tc.remove(child)
-    p = cell.add_paragraph()
+# სურათის ზუსტად ცენტრში განთავსება
+def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
+    clear_cell_completely(cell)
+    try:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    except Exception:
+        pass
+    p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.0
-    lbl = p.add_run("ქარის სიჩქარე\nWind Speed:\n")
-    lbl.font.size = Pt(7.5)
-    r = p.add_run(str(wind_val))
-    r.font.size = Pt(8.5)
-    r.font.bold = True
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after = Pt(2)
+    r = p.add_run()
+    r.add_picture(io.BytesIO(file_bytes), width=width)
 
-# Generic compact cell populator with color support
-def populate_compact_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0)):
-    tc = cell._tc
-    for child in list(tc):
-        if not child.tag.endswith('tcPr'):
-            tc.remove(child)
-    p = cell.add_paragraph()
-    p.alignment = align
-    p.paragraph_format.space_before = Pt(1.5)
-    p.paragraph_format.space_after = Pt(1.5)
-    p.paragraph_format.line_spacing = 1.05
-    r = p.add_run(str(text))
-    r.font.size = Pt(font_size)
-    r.font.bold = bold
-    r.font.color.rgb = RGBColor(*color_rgb)
+# ქარის სიჩქარის უჯრედის ფორმატირება
+def set_clean_wind_cell(cell, wind_val):
+    clear_cell_completely(cell)
+    try:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    except Exception:
+        pass
+    p = cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
+    p.paragraph_format.line_spacing = 1.0
+    lbl = p.add_run("ქარის სიჩქარე Wind Speed:\n")
+    lbl.font.size = Pt(7.5)
+    lbl.font.bold = False
+    lbl.font.color.rgb = RGBColor(0, 0, 0)
+    val = p.add_run(str(wind_val if wind_val else "-"))
+    val.font.size = Pt(8.5)
+    val.font.bold = True
+    val.font.color.rgb = RGBColor(0, 0, 0)
 
 WEATHER_CONDITIONS = [
     "",
@@ -164,7 +212,7 @@ WEATHER_CONDITIONS = [
     "თოვლიანი/snowy"
 ]
 
-# ==================== INPUT FIELDS (EMPTY BY DEFAULT) ====================
+# ==================== INPUT FIELDS ====================
 # 1. ძირითადი ინფორმაცია
 st.subheader("1. ძირითადი ინფორმაცია / General Info")
 col1, col2, col3, col4 = st.columns([1, 1, 1.5, 2])
@@ -212,7 +260,7 @@ cond18 = w3.selectbox("ამინდის პირობა (18:00)", WEATHE
 
 st.divider()
 
-# 3. სამუშაოები
+# 3. სამუშაოები (Daily Works)
 st.subheader("3. სამუშაოების აღწერა / Daily Works")
 saved_task_count = int(draft.get("task_count", 1))
 task_count = st.number_input("სამუშაოების რაოდენობა", min_value=1, max_value=25, value=saved_task_count)
@@ -224,24 +272,18 @@ for i in range(int(task_count)):
     tc1, tc2, tc3, tc4, tc5 = st.columns([2, 1, 1, 2, 4])
     
     t_prev = draft_tasks[i] if i < len(draft_tasks) else {}
-    def_name = t_prev.get("name", "")
-    def_mp = t_prev.get("manpower", "")
-    def_wbs = t_prev.get("wbs", "")
-    def_co = t_prev.get("contractor", "")
-    def_desc = t_prev.get("desc", "")
-
-    w_name = tc1.text_input(f"დასახელება #{i+1}", value=def_name, key=f"wn_{i}")
-    m_pow = tc2.text_input(f"პერსონალი #{i+1}", value=def_mp, key=f"mp_{i}")
-    wbs_c = tc3.text_input(f"WBS #{i+1}", value=def_wbs, key=f"wbs_{i}")
-    c_tor = tc4.text_input(f"კონტრაქტორი #{i+1}", value=def_co, key=f"co_{i}")
-    desc = tc5.text_input(f"აღწერა #{i+1}", value=def_desc, key=f"de_{i}")
+    w_name = tc1.text_input(f"დასახელება #{i+1}", value=t_prev.get("name", ""), key=f"wn_{i}")
+    m_pow = tc2.text_input(f"პერსონალი #{i+1}", value=t_prev.get("manpower", ""), key=f"mp_{i}")
+    wbs_c = tc3.text_input(f"WBS #{i+1}", value=t_prev.get("wbs", ""), key=f"wbs_{i}")
+    c_tor = tc4.text_input(f"კონტრაქტორი #{i+1}", value=t_prev.get("contractor", ""), key=f"co_{i}")
+    desc = tc5.text_input(f"აღწერა #{i+1}", value=t_prev.get("desc", ""), key=f"de_{i}")
     tasks.append({"num": i+1, "contractor": c_tor, "manpower": m_pow, "wbs": wbs_c, "name": w_name, "desc": desc})
 
 st.divider()
 
-# 4. ფოტოები (Supports up to 100 photos)
+# 4. ფოტოები
 st.subheader("4. სამუშაოების ფოტომასალა / Photos & Descriptions")
-st.info("💡 თითო გვერდზე თავსდება 6 ფოტო. 7+ ფოტოს შემთხვევაში ავტომატურად შეიქმნება ახალი სრული გვერდი (მაქსიმუმ 100 ფოტო).")
+st.info("💡 თითო გვერდზე თავსდება 6 ფოტო. 7+ ფოტოს შემთხვევაში ავტომატურად შეიქმნება ახალი გვერდი (მაქსიმუმ 100 ფოტო).")
 
 saved_photo_slots = min(int(draft.get("photo_slots_count", 6)), 100)
 photo_slots_count = st.number_input("რამდენი ფოტოს ატვირთვა გსურთ?", min_value=1, max_value=100, value=saved_photo_slots)
@@ -259,7 +301,7 @@ for pi in range(int(photo_slots_count)):
 
 st.divider()
 
-# 5. პერსონალი
+# 5. პერსონალი (Key Staff)
 st.subheader("5. სამშენებლო მოედანზე მომუშავე პერსონალი / Key Staff")
 st.caption("ჩაწერეთ მხოლოდ დღეს მყოფი თანამშრომლები.")
 saved_staff_count = int(draft.get("staff_count", 0))
@@ -279,7 +321,7 @@ for si in range(int(staff_count)):
     s_mail = sc5.text_input("ელ. ფოსტა", value=st_prev.get("mail", ""), key=f"st_m_{si}")
     staff_members.append({"num": si+1, "comp": s_comp, "pos": s_pos, "name": s_name, "phone": s_phone, "mail": s_mail})
 
-# Silent Autosave
+# ავტომატური შენახვა
 current_state_to_save = {
     "rep_num": rep_num,
     "rep_date": rep_date.strftime("%Y-%m-%d"),
@@ -309,259 +351,327 @@ if generate_btn:
         formatted_date = rep_date.strftime("%Y/%m/%d")
         final_doc_code = custom_doc_code.strip() if custom_doc_code.strip() else f"CMC-CMS-DPR-{rep_num or '001'}-{rep_date.strftime('%Y%m%d')}-Rev00"
 
-        # 1. Update Body Paragraphs & Correct Misspellings
-        for p in doc.paragraphs:
-            safe_replace(p, "სამუშაეობის", "სამუშაოების")
-            safe_replace(p, "სამუშაეობა", "სამუშაოები")
-
-            if "CMC-CMS-DPR-" in p.text or "{{ doc_code }}" in p.text:
-                p.text = ""
-                r = p.add_run(final_doc_code)
-                r.font.color.rgb = RGBColor(255, 255, 255)
-                r.font.bold = True
-                r.font.size = Pt(8.5)
-            if p.text.strip() in ["001", "{{ rep_num }}", "111", str(rep_num)]:
-                p.text = ""
-                r = p.add_run(str(rep_num))
-                r.font.color.rgb = RGBColor(255, 255, 255)
-                r.font.bold = True
-                r.font.size = Pt(9.5)
-
-        # 2. Iterate Tables
-        for table in doc.tables:
-            t_text = " ".join([c.text for row in table.rows for c in row.cells])
-
-            # A. HEADER CELLS (CLEAN SINGLE-BLOCK ASSIGNMENT, NO DUPLICATES)
-            for row in table.rows:
-                for cell in row.cells:
-                    # Fix any template typos in this cell
-                    for p in cell.paragraphs:
-                        safe_replace(p, "სამუშაეობის", "სამუშაოების")
-                        safe_replace(p, "სამუშაეობა", "სამუშაოები")
-
-                    raw_c = cell.text.strip()
-
-                    # Client
-                    if ("დამკვეთი" in raw_c or "Client:" in raw_c) and ("ამინდი" not in raw_c and "Weather" not in raw_c):
-                        set_cell_header_block(cell, "დამკვეთი / Client:", client_name)
-
-                    # Date
-                    elif ("თარიღი" in raw_c or "Date:" in raw_c) and ("ამინდი" not in raw_c and "Weather" not in raw_c):
-                        set_cell_header_block(cell, "თარიღი / Date:", formatted_date)
-
-                    # Location
-                    elif "ადგილმდებარეობა" in raw_c or "Location:" in raw_c:
-                        set_cell_header_block(cell, "ადგილმდებარეობა / Location:", site_location)
-
-                    # Prepared by
-                    elif "მოამზადა" in raw_c or "Prepared by" in raw_c:
-                        set_cell_header_block(cell, "მოამზადა / Prepared by:", prepared_by)
-
-                    # Document Code in table
-                    elif "CMC-CMS-DPR-" in raw_c or "{{ doc_code }}" in raw_c:
-                        for p in cell.paragraphs:
-                            if "CMC-CMS-DPR-" in p.text or "{{ doc_code }}" in p.text:
-                                p.text = ""
-                                r = p.add_run(final_doc_code)
-                                r.font.color.rgb = RGBColor(255, 255, 255)
-                                r.font.bold = True
-                                r.font.size = Pt(8.5)
-
-                    # Report Number in table
-                    elif raw_c in ["001", "{{ rep_num }}", "111", str(rep_num)]:
-                        for p in cell.paragraphs:
-                            if p.text.strip() in ["001", "{{ rep_num }}", "111", str(rep_num)]:
-                                p.text = ""
-                                r = p.add_run(str(rep_num))
-                                r.font.color.rgb = RGBColor(255, 255, 255)
-                                r.font.bold = True
-                                r.font.size = Pt(9.5)
-
-                    # Ensure white banner title text
-                    if "ყოველდღიური რეპორტი" in raw_c or "Daily Progress Report" in raw_c:
-                        for p in cell.paragraphs:
-                            if "{{ rep_num }}" in p.text:
-                                p.text = p.text.replace("{{ rep_num }}", str(rep_num))
-                            for r in p.runs:
-                                r.font.color.rgb = RGBColor(255, 255, 255)
-
-            # B. WEATHER & WIND DIRECT REPLACEMENT (UNCONDITIONAL TAG SCANNER)
-            for r_idx, row in enumerate(table.rows):
-                row_raw = " ".join([c.text for c in row.cells])
-
-                for cell in row.cells:
-                    c_txt = cell.text
-                    if re.search(r'\{\{\s*w9\s*\}\}', c_txt):
-                        set_clean_wind_cell(cell, w9)
-                    elif re.search(r'\{\{\s*w14\s*\}\}', c_txt):
-                        set_clean_wind_cell(cell, w14)
-                    elif re.search(r'\{\{\s*w18\s*\}\}', c_txt):
-                        set_clean_wind_cell(cell, w18)
-                    elif re.search(r'\{\{\s*t9\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, t9, font_size=9.5, bold=True)
-                    elif re.search(r'\{\{\s*t14\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, t14, font_size=9.5, bold=True)
-                    elif re.search(r'\{\{\s*t18\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, t18, font_size=9.5, bold=True)
-                    elif re.search(r'\{\{\s*cond9\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, cond9, font_size=8.5, bold=False)
-                    elif re.search(r'\{\{\s*cond14\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, cond14, font_size=8.5, bold=False)
-                    elif re.search(r'\{\{\s*cond18\s*\}\}', c_txt):
-                        set_clean_weather_cell(cell, cond18, font_size=8.5, bold=False)
-
-                if ("wind speed" in row_raw.lower() or "ქარის სიჩქარე" in row_raw) and len(row.cells) >= 5:
-                    set_clean_wind_cell(row.cells[0], w9)
-                    set_clean_wind_cell(row.cells[2], w14)
-                    set_clean_wind_cell(row.cells[4], w18)
-
-                if any(h in row_raw for h in ["9:00", "09:00", "9·00"]) and "14:00" in row_raw:
-                    if r_idx + 1 < len(table.rows):
-                        t_row = table.rows[r_idx + 1]
-                        if len(t_row.cells) >= 6:
-                            set_clean_weather_cell(t_row.cells[0], t9, font_size=9.5, bold=True)
-                            set_clean_weather_cell(t_row.cells[1], cond9, font_size=8.5, bold=False)
-                            set_clean_weather_cell(t_row.cells[2], t14, font_size=9.5, bold=True)
-                            set_clean_weather_cell(t_row.cells[3], cond14, font_size=8.5, bold=False)
-                            set_clean_weather_cell(t_row.cells[4], t18, font_size=9.5, bold=True)
-                            set_clean_weather_cell(t_row.cells[5], cond18, font_size=8.5, bold=False)
-
-            # C. DAILY WORKS TABLE (HEADERS 100% PURE WHITE ON DARK BACKGROUND)
-            if ("WBS" in t_text and ("სამუშაო" in t_text or "სამუშაე" in t_text or "Code" in t_text)) or "{{ c1 }}" in t_text:
-                header_labels = [
-                    ("№", WD_ALIGN_PARAGRAPH.CENTER),
-                    ("შემსრულებელი\nContractor", WD_ALIGN_PARAGRAPH.CENTER),
-                    ("მუშახელი\nManpower", WD_ALIGN_PARAGRAPH.CENTER),
-                    ("WBS კოდი\nCode", WD_ALIGN_PARAGRAPH.CENTER),
-                    ("სამუშაოს დასახელება\nWork Description", WD_ALIGN_PARAGRAPH.CENTER),
-                    ("აღწერა / დეტალები\nDescription", WD_ALIGN_PARAGRAPH.CENTER)
-                ]
-                # Headers formatted in PURE WHITE (RGB 255, 255, 255)
-                for c_idx, (lbl, align) in enumerate(header_labels):
-                    populate_compact_cell(table.rows[0].cells[c_idx], lbl, font_size=8.0, bold=True, align=align, color_rgb=(255, 255, 255))
-
-                while len(table.rows) > 1:
-                    table._tbl.remove(table.rows[-1]._tr)
-
-                for tsk in tasks:
-                    new_r = table.add_row()
-                    populate_compact_cell(new_r.cells[0], str(tsk["num"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
-                    populate_compact_cell(new_r.cells[1], str(tsk["contractor"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
-                    populate_compact_cell(new_r.cells[2], str(tsk["manpower"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
-                    populate_compact_cell(new_r.cells[3], str(tsk["wbs"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER, color_rgb=(0, 0, 0))
-                    populate_compact_cell(new_r.cells[4], str(tsk["name"]), font_size=8.0, bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0))
-                    populate_compact_cell(new_r.cells[5], str(tsk["desc"]), font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color_rgb=(0, 0, 0))
-
-            # D. PHOTOS TABLE
-            if "ფოტომასალა" in t_text or "სამუშაო პროცესი" in t_text or "სამუშაეობის" in t_text:
-                num_uploaded = len(photos_data)
-                process_rows = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
-
-                for proc_i, (h_idx, p_idx, c_idx) in enumerate(process_rows):
-                    if h_idx < len(table.rows) and p_idx < len(table.rows) and c_idx < len(table.rows):
-                        h_row = table.rows[h_idx]
-                        p_row = table.rows[p_idx]
-                        c_row = table.rows[c_idx]
-
-                        slot_a = proc_i * 2
-                        slot_b = proc_i * 2 + 1
-
-                        p_row.cells[0].text = ""
-                        c_row.cells[0].text = ""
-                        if slot_a < num_uploaded:
-                            p_run = p_row.cells[0].paragraphs[0].add_run()
-                            p_run.add_picture(io.BytesIO(photos_data[slot_a]["file"].getvalue()), width=Inches(3.15))
-                            populate_compact_cell(c_row.cells[0], photos_data[slot_a]["caption"], font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                        p_row.cells[1].text = ""
-                        c_row.cells[1].text = ""
-                        if slot_b < num_uploaded:
-                            p_run = p_row.cells[1].paragraphs[0].add_run()
-                            p_run.add_picture(io.BytesIO(photos_data[slot_b]["file"].getvalue()), width=Inches(3.15))
-                            populate_compact_cell(c_row.cells[1], photos_data[slot_b]["caption"], font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                        if slot_a >= num_uploaded and slot_b >= num_uploaded:
-                            h_row.cells[0].text = ""
-
-                # Extra Photos (> 6) — Dynamic Pagination up to 100
-                if num_uploaded > 6:
-                    remaining_photos = photos_data[6:]
-                    proc_counter = 4
-                    sample_photo_row = table.rows[2]
-                    sample_cap_row = table.rows[3]
-
-                    for pair_start in range(0, len(remaining_photos), 2):
-                        t_row = clone_row(table, table.rows[1])
-                        t_cell = t_row.cells[0]
-                        t_cell.merge(t_row.cells[1])
-                        t_cell.text = f"სამუშაო პროცესი / Work Process №{proc_counter}"
-                        for r in t_cell.paragraphs[0].runs:
-                            r.font.color.rgb = RGBColor(255, 255, 255)
-                            r.font.bold = True
-                        if proc_counter == 4 or (proc_counter - 4) % 3 == 0:
-                            t_cell.paragraphs[0].paragraph_format.page_break_before = True
-
-                        p_row = clone_row(table, sample_photo_row)
-                        c_row = clone_row(table, sample_cap_row)
-
-                        p_row.cells[0].text = ""
-                        c_row.cells[0].text = ""
-                        p_row.cells[0].paragraphs[0].add_run().add_picture(io.BytesIO(remaining_photos[pair_start]["file"].getvalue()), width=Inches(3.15))
-                        populate_compact_cell(c_row.cells[0], remaining_photos[pair_start]["caption"], font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                        p_row.cells[1].text = ""
-                        c_row.cells[1].text = ""
-                        if pair_start + 1 < len(remaining_photos):
-                            p_row.cells[1].paragraphs[0].add_run().add_picture(io.BytesIO(remaining_photos[pair_start + 1]["file"].getvalue()), width=Inches(3.15))
-                            populate_compact_cell(c_row.cells[1], remaining_photos[pair_start + 1]["caption"], font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                        proc_counter += 1
-
-            # E. KEY STAFF TABLE
-            if "სამშენებლო მოედანზე მომუშავე კომპანიები" in t_text or "Key Staff" in t_text:
-                while len(table.rows) > 2:
-                    table._tbl.remove(table.rows[-1]._tr)
-
-                for sm in staff_members:
-                    s_row = table.add_row()
-                    populate_compact_cell(s_row.cells[0], str(sm["num"]), font_size=7.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(s_row.cells[1], str(sm["comp"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(s_row.cells[2], str(sm["pos"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(s_row.cells[3], str(sm["name"]), font_size=7.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(s_row.cells[4], str(sm["phone"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-                    populate_compact_cell(s_row.cells[5], str(sm["mail"]), font_size=7.5, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-        # 3. GLOBAL SWEEP: Replace any remaining placeholders & misspellings anywhere in document
-        global_tag_map = {
-            r'\{\{\s*w9\s*\}\}': str(w9),
-            r'\{\{\s*w14\s*\}\}': str(w14),
-            r'\{\{\s*w18\s*\}\}': str(w18),
-            r'\{\{\s*t9\s*\}\}': str(t9),
-            r'\{\{\s*t14\s*\}\}': str(t14),
-            r'\{\{\s*t18\s*\}\}': str(t18),
-            r'\{\{\s*cond9\s*\}\}': str(cond9),
-            r'\{\{\s*cond14\s*\}\}': str(cond14),
-            r'\{\{\s*cond18\s*\}\}': str(cond18),
-            r'სამუშაეობის': 'სამუშაოების',
-            r'სამუშაეობა': 'სამუშაოები',
+        replacements = {
+            "{{ doc_code }}": final_doc_code,
+            "{{ rep_num }}": rep_num if rep_num else "-",
+            "{{ rep_date }}": formatted_date,
+            "{{ client }}": client_name if client_name else "-",
+            "{{ location }}": site_location if site_location else "-",
+            "{{ prepared_by }}": prepared_by if prepared_by else "-",
+            "{{ t9 }}": t9 if t9 else "-",
+            "{{ cond9 }}": cond9 if cond9 else "",
+            "{{ w9 }}": w9 if w9 else "-",
+            "{{ t14 }}": t14 if t14 else "-",
+            "{{ cond14 }}": cond14 if cond14 else "",
+            "{{ w14 }}": w14 if w14 else "-",
+            "{{ t18 }}": t18 if t18 else "-",
+            "{{ cond18 }}": cond18 if cond18 else "",
+            "{{ w18 }}": w18 if w18 else "-",
+            "007": rep_num if rep_num else "-",
+            "2026/10/08": formatted_date,
+            "მურად ახალაძე": prepared_by if prepared_by else "-",
+            "სამუშაეობის": "სამუშაოების",
+            "სამუშაეობა": "სამუშაოები"
         }
+
+        # 1. აბზაცების განახლება
         for p in doc.paragraphs:
-            for pat, val in global_tag_map.items():
-                replace_in_p(p, pat, val)
+            for k, v in replacements.items():
+                safe_replace(p, k, v)
+
+        # 2. ცხრილების განახლება
         for table in doc.tables:
+            # A. ზოგადი placeholder-ების ჩანაცვლება
             for row in table.rows:
                 for cell in row.cells:
                     for p in cell.paragraphs:
-                        for pat, val in global_tag_map.items():
-                            replace_in_p(p, pat, val)
+                        for k, v in replacements.items():
+                            safe_replace(p, k, v)
 
-        # Save Word bytes
+            # B. ქარის სიჩქარე
+            for row in table.rows:
+                row_txt = " ".join([c.text for c in row.cells]).lower()
+                if "wind speed" in row_txt or "ქარის სიჩქარე" in row_txt:
+                    seen_tcs = set()
+                    wind_cells = []
+                    for c in row.cells:
+                        if c._tc not in seen_tcs and ("wind speed" in c.text.lower() or "ქარის სიჩქარე" in c.text):
+                            seen_tcs.add(c._tc)
+                            wind_cells.append(c)
+
+                    if len(wind_cells) >= 1:
+                        set_clean_wind_cell(wind_cells[0], w9)
+                    if len(wind_cells) >= 2:
+                        set_clean_wind_cell(wind_cells[1], w14)
+                    if len(wind_cells) >= 3:
+                        set_clean_wind_cell(wind_cells[2], w18)
+
+            # C. სამუშაოების ცხრილი: 100% ცენტრირება
+            works_h_idx = None
+            photo_b_idx = None
+            for r_idx, row in enumerate(table.rows):
+                r_txt = " ".join([c.text for c in row.cells])
+                if ("WBS" in r_txt or "Code" in r_txt) and ("შემსრულებელი" in r_txt or "Contractor" in r_txt or "სამუშაოს დასახელება" in r_txt):
+                    works_h_idx = r_idx
+                if works_h_idx is not None and r_idx > works_h_idx and ("ფოტომასალა" in r_txt or "Work Progress Photos" in r_txt or "სამუშაო პროცესი" in r_txt):
+                    photo_b_idx = r_idx
+                    break
+
+            if works_h_idx is not None:
+                for c in table.rows[works_h_idx].cells:
+                    try:
+                        c.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                    except Exception:
+                        pass
+                    for p in c.paragraphs:
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                sample_task_tr = None
+                task_rows_to_delete = []
+
+                if photo_b_idx is not None:
+                    photo_banner_row = table.rows[photo_b_idx]
+                    for r_i in range(works_h_idx + 1, photo_b_idx):
+                        if sample_task_tr is None:
+                            sample_task_tr = copy.deepcopy(table.rows[r_i]._tr)
+                        task_rows_to_delete.append(table.rows[r_i])
+                    if sample_task_tr is None:
+                        sample_task_tr = copy.deepcopy(table.rows[works_h_idx]._tr)
+
+                    for r in task_rows_to_delete:
+                        table._tbl.remove(r._tr)
+
+                    for tsk in tasks:
+                        new_tr = copy.deepcopy(sample_task_tr)
+                        new_row = docx.table._Row(new_tr, table)
+                        vals = [
+                            str(tsk["num"]),
+                            str(tsk["contractor"]),
+                            str(tsk["manpower"]),
+                            str(tsk["wbs"]),
+                            str(tsk["name"]),
+                            str(tsk["desc"])
+                        ]
+                        for c_idx, val in enumerate(vals):
+                            if c_idx < len(new_row.cells):
+                                populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                        photo_banner_row._tr.addprevious(new_tr)
+                else:
+                    if len(table.rows) > works_h_idx + 1:
+                        sample_task_tr = copy.deepcopy(table.rows[works_h_idx + 1]._tr)
+                    else:
+                        sample_task_tr = copy.deepcopy(table.rows[works_h_idx]._tr)
+
+                    while len(table.rows) > works_h_idx + 1:
+                        table._tbl.remove(table.rows[-1]._tr)
+
+                    for tsk in tasks:
+                        new_tr = copy.deepcopy(sample_task_tr)
+                        new_row = docx.table._Row(new_tr, table)
+                        vals = [
+                            str(tsk["num"]),
+                            str(tsk["contractor"]),
+                            str(tsk["manpower"]),
+                            str(tsk["wbs"]),
+                            str(tsk["name"]),
+                            str(tsk["desc"])
+                        ]
+                        for c_idx, val in enumerate(vals):
+                            if c_idx < len(new_row.cells):
+                                populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                        table._tbl.append(new_tr)
+
+            # D. ფოტოების ცხრილი: სურათების ზუსტი ცენტრირება
+            t_text = " ".join([c.text for row in table.rows for c in row.cells])
+            if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
+                num_uploaded = len(photos_data)
+                wp_idx = None
+                for r_idx, row in enumerate(table.rows):
+                    r_txt = " ".join([c.text for c in row.cells])
+                    if "სამუშაო პროცესი" in r_txt or "Work Process" in r_txt:
+                        wp_idx = r_idx
+                        break
+
+                if wp_idx is not None:
+                    pairs = [
+                        (wp_idx + 1, wp_idx + 2),
+                        (wp_idx + 3, wp_idx + 4),
+                        (wp_idx + 5, wp_idx + 6)
+                    ]
+
+                    for p_i, (p_row_idx, c_row_idx) in enumerate(pairs):
+                        if p_row_idx < len(table.rows) and c_row_idx < len(table.rows):
+                            p_row = table.rows[p_row_idx]
+                            c_row = table.rows[c_row_idx]
+
+                            slot_a = p_i * 2
+                            slot_b = p_i * 2 + 1
+
+                            # სლოტი A (მარცხენა ფოტო)
+                            if slot_a < num_uploaded:
+                                insert_centered_picture(p_row.cells[0], photos_data[slot_a]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(c_row.cells[0], photos_data[slot_a]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                            else:
+                                clear_cell_completely(p_row.cells[0])
+                                clear_cell_completely(c_row.cells[0])
+
+                            # სლოტი B (მარჯვენა ფოტო)
+                            if slot_b < num_uploaded:
+                                insert_centered_picture(p_row.cells[1], photos_data[slot_b]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(c_row.cells[1], photos_data[slot_b]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                            else:
+                                clear_cell_completely(p_row.cells[1])
+                                clear_cell_completely(c_row.cells[1])
+
+                    # დამატებითი ფოტოები (> 6)
+                    if num_uploaded > 6:
+                        remaining_photos = photos_data[6:]
+                        proc_counter = 4
+                        sample_header_row = table.rows[wp_idx]
+                        sample_photo_row = table.rows[wp_idx + 1]
+                        sample_cap_row = table.rows[wp_idx + 2]
+
+                        hs_row = None
+                        for r_idx in range(wp_idx + 7, len(table.rows)):
+                            r_txt = " ".join([c.text for c in table.rows[r_idx].cells])
+                            if "Health & Safety" in r_txt or "უსაფრთხოების" in r_txt:
+                                hs_row = table.rows[r_idx]
+                                break
+
+                        for pair_start in range(0, len(remaining_photos), 2):
+                            new_h_tr = copy.deepcopy(sample_header_row._tr)
+                            new_h_row = docx.table._Row(new_h_tr, table)
+                            t_cell = new_h_row.cells[0]
+                            if len(new_h_row.cells) > 1:
+                                t_cell.merge(new_h_row.cells[1])
+                            t_cell.text = f"სამუშაო პროცესი / Work Process №{proc_counter}"
+                            for r in t_cell.paragraphs[0].runs:
+                                r.font.bold = True
+                            if proc_counter == 4 or (proc_counter - 4) % 3 == 0:
+                                t_cell.paragraphs[0].paragraph_format.page_break_before = True
+
+                            new_p_tr = copy.deepcopy(sample_photo_row._tr)
+                            new_p_row = docx.table._Row(new_p_tr, table)
+
+                            new_c_tr = copy.deepcopy(sample_cap_row._tr)
+                            new_c_row = docx.table._Row(new_c_tr, table)
+
+                            insert_centered_picture(new_p_row.cells[0], remaining_photos[pair_start]["file"].getvalue(), width=Inches(3.15))
+                            populate_cell(new_c_row.cells[0], remaining_photos[pair_start]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+                            if pair_start + 1 < len(remaining_photos):
+                                insert_centered_picture(new_p_row.cells[1], remaining_photos[pair_start + 1]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(new_c_row.cells[1], remaining_photos[pair_start + 1]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                            else:
+                                clear_cell_completely(new_p_row.cells[1])
+                                clear_cell_completely(new_c_row.cells[1])
+
+                            if hs_row is not None:
+                                hs_row._tr.addprevious(new_h_tr)
+                                hs_row._tr.addprevious(new_p_tr)
+                                hs_row._tr.addprevious(new_c_tr)
+                            else:
+                                table._tbl.append(new_h_tr)
+                                table._tbl.append(new_p_tr)
+                                table._tbl.append(new_c_tr)
+
+                            proc_counter += 1
+
+            # E. პერსონალის (Key Staff) ცხრილი: 100% ცენტრირება
+            staff_h_idx = None
+            sig_r_idx = None
+            for r_idx, row in enumerate(table.rows):
+                r_txt = " ".join([c.text for c in row.cells])
+                if ("კომპანია" in r_txt or "Company" in r_txt) and ("E-mail" in r_txt or "ელ. ფოსტა" in r_txt or "Phone number" in r_txt):
+                    staff_h_idx = r_idx
+                if staff_h_idx is not None and r_idx > staff_h_idx and ("ვადასტურებ" in r_txt or "განვიხილე" in r_txt or "შენიშვნა" in r_txt):
+                    sig_r_idx = r_idx
+                    break
+
+            if staff_h_idx is not None:
+                for c in table.rows[staff_h_idx].cells:
+                    try:
+                        c.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                    except Exception:
+                        pass
+                    for p in c.paragraphs:
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                sample_staff_tr = None
+                staff_rows_to_delete = []
+
+                if sig_r_idx is not None:
+                    sig_row = table.rows[sig_r_idx]
+                    for r_i in range(staff_h_idx + 1, sig_r_idx):
+                        if sample_staff_tr is None:
+                            sample_staff_tr = copy.deepcopy(table.rows[r_i]._tr)
+                        staff_rows_to_delete.append(table.rows[r_i])
+                    if sample_staff_tr is None:
+                        sample_staff_tr = copy.deepcopy(table.rows[staff_h_idx]._tr)
+
+                    for r in staff_rows_to_delete:
+                        table._tbl.remove(r._tr)
+
+                    if staff_members:
+                        for sm in staff_members:
+                            new_tr = copy.deepcopy(sample_staff_tr)
+                            new_row = docx.table._Row(new_tr, table)
+                            vals = [
+                                str(sm["num"]),
+                                str(sm["comp"]),
+                                str(sm["pos"]),
+                                str(sm["name"]),
+                                str(sm["phone"]),
+                                str(sm["mail"])
+                            ]
+                            for c_idx, val in enumerate(vals):
+                                if c_idx < len(new_row.cells):
+                                    populate_cell(new_row.cells[c_idx], val, font_size=7.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                            sig_row._tr.addprevious(new_tr)
+                    else:
+                        new_tr = copy.deepcopy(sample_staff_tr)
+                        new_row = docx.table._Row(new_tr, table)
+                        for c in new_row.cells:
+                            clear_cell_completely(c)
+                        sig_row._tr.addprevious(new_tr)
+                else:
+                    if len(table.rows) > staff_h_idx + 1:
+                        sample_staff_tr = copy.deepcopy(table.rows[staff_h_idx + 1]._tr)
+                    else:
+                        sample_staff_tr = copy.deepcopy(table.rows[staff_h_idx]._tr)
+
+                    while len(table.rows) > staff_h_idx + 1:
+                        table._tbl.remove(table.rows[-1]._tr)
+
+                    if staff_members:
+                        for sm in staff_members:
+                            new_tr = copy.deepcopy(sample_staff_tr)
+                            new_row = docx.table._Row(new_tr, table)
+                            vals = [
+                                str(sm["num"]),
+                                str(sm["comp"]),
+                                str(sm["pos"]),
+                                str(sm["name"]),
+                                str(sm["phone"]),
+                                str(sm["mail"])
+                            ]
+                            for c_idx, val in enumerate(vals):
+                                if c_idx < len(new_row.cells):
+                                    populate_cell(new_row.cells[c_idx], val, font_size=7.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                            table._tbl.append(new_tr)
+                    else:
+                        new_tr = copy.deepcopy(sample_staff_tr)
+                        new_row = docx.table._Row(new_tr, table)
+                        for c in new_row.cells:
+                            clear_cell_completely(c)
+                        table._tbl.append(new_tr)
+
         bio = io.BytesIO()
         doc.save(bio)
         st.session_state["docx_bytes"] = bio.getvalue()
         st.session_state["doc_code"] = final_doc_code
 
-        # ==================== PDF CONVERSION ENGINE ====================
+        # ==================== PDF CONVERSION ====================
         temp_doc_name = f"temp_{final_doc_code}.docx"
         temp_pdf_name = f"{final_doc_code}.pdf"
         abs_docx = os.path.abspath(temp_doc_name)
@@ -573,7 +683,7 @@ if generate_btn:
         pdf_converted = False
         conversion_error = None
 
-        # 1. Try LibreOffice (Linux / Streamlit Cloud / local LibreOffice)
+        # 1. LibreOffice (Cloud / Linux)
         try:
             cmd = ["soffice", "--headless", "--convert-to", "pdf", abs_docx, "--outdir", os.path.dirname(abs_docx)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
@@ -587,7 +697,7 @@ if generate_btn:
         except Exception as e:
             conversion_error = e
 
-        # 2. Try Windows Microsoft Word (Local Windows PC)
+        # 2. Windows MS Word (Local PC)
         if not pdf_converted:
             try:
                 import pythoncom
@@ -616,7 +726,6 @@ if generate_btn:
                     conversion_error = e2
                     st.session_state["pdf_bytes"] = None
 
-        # Clean up temporary disk files
         if os.path.exists(abs_docx):
             try:
                 os.remove(abs_docx)
