@@ -3,10 +3,7 @@ import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
 from datetime import datetime
-from PIL import Image
 import io
 import os
 import copy
@@ -146,14 +143,6 @@ def clear_cell_completely(cell):
             tc.remove(child)
     cell.add_paragraph()
 
-# Explicitly enforces dark background (#262626) on table cells
-def set_dark_cell_background(cell, hex_color="262626"):
-    tcPr = cell._tc.get_or_add_tcPr()
-    for shd in tcPr.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd'):
-        tcPr.remove(shd)
-    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>')
-    tcPr.append(shd)
-
 def safe_replace(p, old, new):
     if old in p.text:
         for r in p.runs:
@@ -162,13 +151,8 @@ def safe_replace(p, old, new):
         if old in p.text:
             p.text = p.text.replace(old, str(new))
 
-# Sets clean page break on first cell of row only (prevents duplicate blank pages)
-def set_clean_page_break_on_row(row):
-    if len(row.cells) > 0 and len(row.cells[0].paragraphs) > 0:
-        p = row.cells[0].paragraphs[0]
-        p.paragraph_format.page_break_before = True
-
-def populate_cell(cell, text, font_size=11.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
+# ტექსტური უჯრედების ცენტრირება
+def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
     clear_cell_completely(cell)
     try:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -184,8 +168,8 @@ def populate_cell(cell, text, font_size=11.0, bold=False, align=WD_ALIGN_PARAGRA
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# Calibrated to 1.70" max height so all 6 photos fit on Page 2 without spilling onto Page 3
-def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.70):
+# სურათის ზუსტად ცენტრში განთავსება
+def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
     clear_cell_completely(cell)
     try:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -193,23 +177,31 @@ def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.70):
         pass
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.0
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after = Pt(2)
+    r = p.add_run()
+    r.add_picture(io.BytesIO(file_bytes), width=width)
 
+# ქარის სიჩქარის უჯრედის ფორმატირება
+def set_clean_wind_cell(cell, wind_val):
+    clear_cell_completely(cell)
     try:
-        img = Image.open(io.BytesIO(file_bytes))
-        w_px, h_px = img.size
-        aspect = w_px / h_px
-
-        r = p.add_run()
-        if (max_w_in / aspect) > max_h_in:
-            r.add_picture(io.BytesIO(file_bytes), height=Inches(max_h_in))
-        else:
-            r.add_picture(io.BytesIO(file_bytes), width=Inches(max_w_in))
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     except Exception:
-        r = p.add_run()
-        r.add_picture(io.BytesIO(file_bytes), width=Inches(max_w_in))
+        pass
+    p = cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
+    p.paragraph_format.line_spacing = 1.0
+    lbl = p.add_run("ქარის სიჩქარე Wind Speed:\n")
+    lbl.font.size = Pt(7.5)
+    lbl.font.bold = False
+    lbl.font.color.rgb = RGBColor(0, 0, 0)
+    val = p.add_run(str(wind_val if wind_val else "-"))
+    val.font.size = Pt(8.5)
+    val.font.bold = True
+    val.font.color.rgb = RGBColor(0, 0, 0)
 
 WEATHER_CONDITIONS = [
     "",
@@ -329,6 +321,7 @@ for si in range(int(staff_count)):
     s_mail = sc5.text_input("ელ. ფოსტა", value=st_prev.get("mail", ""), key=f"st_m_{si}")
     staff_members.append({"num": si+1, "comp": s_comp, "pos": s_pos, "name": s_name, "phone": s_phone, "mail": s_mail})
 
+# ავტომატური შენახვა
 current_state_to_save = {
     "rep_num": rep_num,
     "rep_date": rep_date.strftime("%Y-%m-%d"),
@@ -381,225 +374,39 @@ if generate_btn:
             "სამუშაეობა": "სამუშაოები"
         }
 
-        # 1. Update Paragraphs
+        # 1. აბზაცების განახლება
         for p in doc.paragraphs:
             for k, v in replacements.items():
                 safe_replace(p, k, v)
 
-        # 2. Iterate Tables
+        # 2. ცხრილების განახლება
         for table in doc.tables:
-            t_text = " ".join([c.text for row in table.rows for c in row.cells])
+            # A. ზოგადი placeholder-ების ჩანაცვლება
+            for row in table.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        for k, v in replacements.items():
+                            safe_replace(p, k, v)
 
-            # A. HEADER BANNER: Exact 11pt, 14pt, Solid Dark Background (#262626), 100% Pure White Text
-            if "Daily Progress Report" in t_text or "ყოველდღიური რეპორტი" in t_text or "სითი მოლი" in t_text:
-                for row in table.rows:
-                    for cell in row.cells:
-                        c_raw = cell.text
+            # B. ქარის სიჩქარე
+            for row in table.rows:
+                row_txt = " ".join([c.text for c in row.cells]).lower()
+                if "wind speed" in row_txt or "ქარის სიჩქარე" in row_txt:
+                    seen_tcs = set()
+                    wind_cells = []
+                    for c in row.cells:
+                        if c._tc not in seen_tcs and ("wind speed" in c.text.lower() or "ქარის სიჩქარე" in c.text):
+                            seen_tcs.add(c._tc)
+                            wind_cells.append(c)
 
-                        # 1. Title & Report Number -> 14pt Pure White on Dark Background
-                        if "Daily Progress Report" in c_raw or "ყოველდღიური რეპორტი" in c_raw:
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            try:
-                                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                            except Exception:
-                                pass
-                            p = cell.paragraphs[0]
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            r_title = p.add_run("ყოველდღიური რეპორტი\nDaily Progress Report\n")
-                            r_title.font.size = Pt(14)
-                            r_title.font.bold = True
-                            r_title.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r_num = p.add_run(str(rep_num if rep_num else "001"))
-                            r_num.font.size = Pt(14)
-                            r_num.font.bold = True
-                            r_num.font.color.rgb = RGBColor(255, 255, 255)
+                    if len(wind_cells) >= 1:
+                        set_clean_wind_cell(wind_cells[0], w9)
+                    if len(wind_cells) >= 2:
+                        set_clean_wind_cell(wind_cells[1], w14)
+                    if len(wind_cells) >= 3:
+                        set_clean_wind_cell(wind_cells[2], w18)
 
-                        elif c_raw.strip() in ["007", "001", "111", "{{ rep_num }}", str(rep_num)]:
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            try:
-                                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                            except Exception:
-                                pass
-                            p = cell.paragraphs[0]
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            r_num = p.add_run(str(rep_num if rep_num else "001"))
-                            r_num.font.size = Pt(14)
-                            r_num.font.bold = True
-                            r_num.font.color.rgb = RGBColor(255, 255, 255)
-
-                        # 2. Project Title -> 11pt Pure White on Dark Background
-                        elif "სითი მოლი" in c_raw or "საბურთალო" in c_raw:
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            try:
-                                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                            except Exception:
-                                pass
-                            p = cell.paragraphs[0]
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            r = p.add_run("სითი მოლი\nსაბურთალო")
-                            r.font.size = Pt(11)
-                            r.font.bold = True
-                            r.font.color.rgb = RGBColor(255, 255, 255)
-
-                        # 3. Client & Location -> 11pt Pure White on Dark Background
-                        elif ("დამკვეთი" in c_raw or "Client:" in c_raw) and ("Weather" not in c_raw and "ამინდი" not in c_raw):
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            p = cell.paragraphs[0]
-                            p.paragraph_format.space_before = Pt(0)
-                            p.paragraph_format.space_after = Pt(2)
-                            
-                            r1 = p.add_run("დამკვეთი / Client:\n")
-                            r1.font.size = Pt(11)
-                            r1.font.underline = True
-                            r1.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r2 = p.add_run(f"{client_name if client_name else '-'}\n\n")
-                            r2.font.size = Pt(11)
-                            r2.font.bold = True
-                            r2.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r3 = p.add_run("ადგილმდებარეობა / Location:\n")
-                            r3.font.size = Pt(11)
-                            r3.font.underline = True
-                            r3.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r4 = p.add_run(f"{site_location if site_location else '-'}")
-                            r4.font.size = Pt(11)
-                            r4.font.bold = True
-                            r4.font.color.rgb = RGBColor(255, 255, 255)
-
-                        # 4. Date & Prepared by -> 11pt Pure White on Dark Background (Prepared by 100% WHITE)
-                        elif ("თარიღი" in c_raw or "Date:" in c_raw) and ("Weather" not in c_raw and "ამინდი" not in c_raw):
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            p = cell.paragraphs[0]
-                            p.paragraph_format.space_before = Pt(0)
-                            p.paragraph_format.space_after = Pt(2)
-                            
-                            r1 = p.add_run("თარიღი / Date:\n")
-                            r1.font.size = Pt(11)
-                            r1.font.underline = True
-                            r1.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r2 = p.add_run(f"{formatted_date}\n\n")
-                            r2.font.size = Pt(11)
-                            r2.font.bold = True
-                            r2.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r3 = p.add_run("მოამზადა / Prepared by:\n")
-                            r3.font.size = Pt(11)
-                            r3.font.underline = True
-                            r3.font.color.rgb = RGBColor(255, 255, 255)
-                            
-                            r4 = p.add_run(f"{prepared_by if prepared_by else '-'}")
-                            r4.font.size = Pt(11)
-                            r4.font.bold = True
-                            r4.font.color.rgb = RGBColor(255, 255, 255)
-
-                        elif "CMC-CMS-DPR-" in c_raw or "{{ doc_code }}" in c_raw:
-                            clear_cell_completely(cell)
-                            set_dark_cell_background(cell, "262626")
-                            p = cell.paragraphs[0]
-                            r = p.add_run(final_doc_code)
-                            r.font.size = Pt(11)
-                            r.font.bold = True
-                            r.font.color.rgb = RGBColor(255, 255, 255)
-
-            # B. WEATHER TABLE: Remove bugged icons & format 11pt cleanly
-            if ("Weather" in t_text or "ამინდი" in t_text) and any(h in t_text for h in ["9:00", "09:00"]):
-                for d in table._tbl.xpath('.//w:drawing | .//w:pict | .//w:object'):
-                    try:
-                        d.getparent().remove(d)
-                    except Exception:
-                        pass
-
-                for r_idx, row in enumerate(table.rows):
-                    row_txt = " ".join([c.text for c in row.cells])
-
-                    # Title "ამინდი / Weather" -> Dark Background + 11pt Bold White
-                    if "ამინდი" in row_txt and "Weather" in row_txt and r_idx == 0:
-                        for cell in row.cells:
-                            set_dark_cell_background(cell, "262626")
-                            for p in cell.paragraphs:
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                for r in p.runs:
-                                    r.font.size = Pt(11)
-                                    r.font.bold = True
-                                    r.font.color.rgb = RGBColor(255, 255, 255)
-
-                    # Hours row: 11pt Bold Black
-                    if any(h in row_txt for h in ["9:00", "09:00"]) and "14:00" in row_txt:
-                        for cell in row.cells:
-                            for p in cell.paragraphs:
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                for r in p.runs:
-                                    r.font.size = Pt(11)
-                                    r.font.bold = True
-                                    r.font.color.rgb = RGBColor(0, 0, 0)
-
-                        # Temperatures & Conditions row: 11pt Black
-                        if r_idx + 1 < len(table.rows):
-                            t_row = table.rows[r_idx + 1]
-                            weather_slots = [
-                                (0, t9, True), (1, cond9, False),
-                                (2, t14, True), (3, cond14, False),
-                                (4, t18, True), (5, cond18, False)
-                            ]
-                            for c_i, val, is_bold in weather_slots:
-                                if c_i < len(t_row.cells):
-                                    populate_cell(t_row.cells[c_i], val, font_size=11.0, bold=is_bold, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-                        # Wind Speed row: Remove black shading, merge cells, format 11pt cleanly
-                        if r_idx + 2 < len(table.rows):
-                            w_row = table.rows[r_idx + 2]
-                            for cell in w_row.cells:
-                                tcPr = cell._tc.get_or_add_tcPr()
-                                for shd in tcPr.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd'):
-                                    tcPr.remove(shd)
-
-                            seen_tcs = []
-                            for c in w_row.cells:
-                                if c._tc not in seen_tcs:
-                                    seen_tcs.append(c._tc)
-
-                            if len(seen_tcs) == 6:
-                                try:
-                                    w_row.cells[0].merge(w_row.cells[1])
-                                    w_row.cells[2].merge(w_row.cells[3])
-                                    w_row.cells[4].merge(w_row.cells[5])
-                                except Exception:
-                                    pass
-
-                            def set_wind_block(cell, val):
-                                clear_cell_completely(cell)
-                                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                                p = cell.paragraphs[0]
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                p.paragraph_format.space_before = Pt(3)
-                                p.paragraph_format.space_after = Pt(3)
-                                p.paragraph_format.line_spacing = 1.05
-                                r_lbl = p.add_run("ქარის სიჩქარე Wind Speed:\n")
-                                r_lbl.font.size = Pt(11)
-                                r_lbl.font.bold = False
-                                r_lbl.font.color.rgb = RGBColor(0, 0, 0)
-                                r_val = p.add_run(str(val if val else "-"))
-                                r_val.font.size = Pt(11)
-                                r_val.font.bold = True
-                                r_val.font.color.rgb = RGBColor(0, 0, 0)
-
-                            if len(w_row.cells) >= 1:
-                                set_wind_block(w_row.cells[0], w9)
-                            if len(w_row.cells) >= 3:
-                                set_wind_block(w_row.cells[2], w14)
-                            if len(w_row.cells) >= 5:
-                                set_wind_block(w_row.cells[4], w18)
-
-            # C. DAILY WORKS TABLE: 11pt, Centered
+            # C. სამუშაოების ცხრილი: 100% ცენტრირება
             works_h_idx = None
             photo_b_idx = None
             for r_idx, row in enumerate(table.rows):
@@ -618,17 +425,12 @@ if generate_btn:
                         pass
                     for p in c.paragraphs:
                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        for r in p.runs:
-                            r.font.size = Pt(11)
-                            r.font.bold = True
 
                 sample_task_tr = None
                 task_rows_to_delete = []
 
                 if photo_b_idx is not None:
                     photo_banner_row = table.rows[photo_b_idx]
-                    set_clean_page_break_on_row(photo_banner_row)
-
                     for r_i in range(works_h_idx + 1, photo_b_idx):
                         if sample_task_tr is None:
                             sample_task_tr = copy.deepcopy(table.rows[r_i]._tr)
@@ -652,7 +454,7 @@ if generate_btn:
                         ]
                         for c_idx, val in enumerate(vals):
                             if c_idx < len(new_row.cells):
-                                populate_cell(new_row.cells[c_idx], val, font_size=11.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                                populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
                         photo_banner_row._tr.addprevious(new_tr)
                 else:
                     if len(table.rows) > works_h_idx + 1:
@@ -676,26 +478,13 @@ if generate_btn:
                         ]
                         for c_idx, val in enumerate(vals):
                             if c_idx < len(new_row.cells):
-                                populate_cell(new_row.cells[c_idx], val, font_size=11.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                                populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
                         table._tbl.append(new_tr)
 
-            # D. PHOTOS TABLE: Force to Page 2, 1.70" max height (Never overflows to Page 3)
+            # D. ფოტოების ცხრილი: სურათების ზუსტი ცენტრირება
+            t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
                 num_uploaded = len(photos_data)
-                
-                for row in table.rows:
-                    r_txt = " ".join([c.text for c in row.cells])
-                    if "ფოტომასალა" in r_txt or "Work Progress Photos" in r_txt:
-                        set_clean_page_break_on_row(row)
-                        for cell in row.cells:
-                            set_dark_cell_background(cell, "262626")
-                            for p in cell.paragraphs:
-                                for r in p.runs:
-                                    r.font.size = Pt(11)
-                                    r.font.bold = True
-                                    r.font.color.rgb = RGBColor(255, 255, 255)
-                        break
-
                 wp_idx = None
                 for r_idx, row in enumerate(table.rows):
                     r_txt = " ".join([c.text for c in row.cells])
@@ -718,30 +507,77 @@ if generate_btn:
                             slot_a = p_i * 2
                             slot_b = p_i * 2 + 1
 
-                            # Slot A
+                            # სლოტი A (მარცხენა ფოტო)
                             if slot_a < num_uploaded:
-                                insert_centered_picture(p_row.cells[0], photos_data[slot_a]["file"].getvalue())
-                                populate_cell(c_row.cells[0], photos_data[slot_a]["caption"], font_size=9.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                                insert_centered_picture(p_row.cells[0], photos_data[slot_a]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(c_row.cells[0], photos_data[slot_a]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
                             else:
                                 clear_cell_completely(p_row.cells[0])
                                 clear_cell_completely(c_row.cells[0])
 
-                            # Slot B
+                            # სლოტი B (მარჯვენა ფოტო)
                             if slot_b < num_uploaded:
-                                insert_centered_picture(p_row.cells[1], photos_data[slot_b]["file"].getvalue())
-                                populate_cell(c_row.cells[1], photos_data[slot_b]["caption"], font_size=9.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                                insert_centered_picture(p_row.cells[1], photos_data[slot_b]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(c_row.cells[1], photos_data[slot_b]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
                             else:
                                 clear_cell_completely(p_row.cells[1])
                                 clear_cell_completely(c_row.cells[1])
 
-                    # Clean transition to Page 3: Set page break directly on Health & Safety row
-                    for r_idx in range(wp_idx + 7, len(table.rows)):
-                        r_txt = " ".join([c.text for c in table.rows[r_idx].cells])
-                        if "Health & Safety" in r_txt or "უსაფრთხოების" in r_txt:
-                            set_clean_page_break_on_row(table.rows[r_idx])
-                            break
+                    # დამატებითი ფოტოები (> 6)
+                    if num_uploaded > 6:
+                        remaining_photos = photos_data[6:]
+                        proc_counter = 4
+                        sample_header_row = table.rows[wp_idx]
+                        sample_photo_row = table.rows[wp_idx + 1]
+                        sample_cap_row = table.rows[wp_idx + 2]
 
-            # E. KEY STAFF TABLE: 100% Centered
+                        hs_row = None
+                        for r_idx in range(wp_idx + 7, len(table.rows)):
+                            r_txt = " ".join([c.text for c in table.rows[r_idx].cells])
+                            if "Health & Safety" in r_txt or "უსაფრთხოების" in r_txt:
+                                hs_row = table.rows[r_idx]
+                                break
+
+                        for pair_start in range(0, len(remaining_photos), 2):
+                            new_h_tr = copy.deepcopy(sample_header_row._tr)
+                            new_h_row = docx.table._Row(new_h_tr, table)
+                            t_cell = new_h_row.cells[0]
+                            if len(new_h_row.cells) > 1:
+                                t_cell.merge(new_h_row.cells[1])
+                            t_cell.text = f"სამუშაო პროცესი / Work Process №{proc_counter}"
+                            for r in t_cell.paragraphs[0].runs:
+                                r.font.bold = True
+                            if proc_counter == 4 or (proc_counter - 4) % 3 == 0:
+                                t_cell.paragraphs[0].paragraph_format.page_break_before = True
+
+                            new_p_tr = copy.deepcopy(sample_photo_row._tr)
+                            new_p_row = docx.table._Row(new_p_tr, table)
+
+                            new_c_tr = copy.deepcopy(sample_cap_row._tr)
+                            new_c_row = docx.table._Row(new_c_tr, table)
+
+                            insert_centered_picture(new_p_row.cells[0], remaining_photos[pair_start]["file"].getvalue(), width=Inches(3.15))
+                            populate_cell(new_c_row.cells[0], remaining_photos[pair_start]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+                            if pair_start + 1 < len(remaining_photos):
+                                insert_centered_picture(new_p_row.cells[1], remaining_photos[pair_start + 1]["file"].getvalue(), width=Inches(3.15))
+                                populate_cell(new_c_row.cells[1], remaining_photos[pair_start + 1]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
+                            else:
+                                clear_cell_completely(new_p_row.cells[1])
+                                clear_cell_completely(new_c_row.cells[1])
+
+                            if hs_row is not None:
+                                hs_row._tr.addprevious(new_h_tr)
+                                hs_row._tr.addprevious(new_p_tr)
+                                hs_row._tr.addprevious(new_c_tr)
+                            else:
+                                table._tbl.append(new_h_tr)
+                                table._tbl.append(new_p_tr)
+                                table._tbl.append(new_c_tr)
+
+                            proc_counter += 1
+
+            # E. პერსონალის (Key Staff) ცხრილი: 100% ცენტრირება
             staff_h_idx = None
             sig_r_idx = None
             for r_idx, row in enumerate(table.rows):
@@ -790,7 +626,7 @@ if generate_btn:
                             ]
                             for c_idx, val in enumerate(vals):
                                 if c_idx < len(new_row.cells):
-                                    populate_cell(new_row.cells[c_idx], val, font_size=8.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                                    populate_cell(new_row.cells[c_idx], val, font_size=7.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
                             sig_row._tr.addprevious(new_tr)
                     else:
                         new_tr = copy.deepcopy(sample_staff_tr)
@@ -821,7 +657,7 @@ if generate_btn:
                             ]
                             for c_idx, val in enumerate(vals):
                                 if c_idx < len(new_row.cells):
-                                    populate_cell(new_row.cells[c_idx], val, font_size=8.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
+                                    populate_cell(new_row.cells[c_idx], val, font_size=7.5, bold=(c_idx in [0, 3]), align=WD_ALIGN_PARAGRAPH.CENTER)
                             table._tbl.append(new_tr)
                     else:
                         new_tr = copy.deepcopy(sample_staff_tr)
@@ -829,15 +665,6 @@ if generate_btn:
                         for c in new_row.cells:
                             clear_cell_completely(c)
                         table._tbl.append(new_tr)
-
-        # Remove floating table positions
-        for tblp in doc._body._element.xpath('.//w:tblpPr'):
-            tblp.getparent().remove(tblp)
-
-        # Convert exact row heights to dynamic heights
-        for trh in doc._body._element.xpath('.//w:trHeight'):
-            if trh.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule') == 'exact':
-                trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule', 'atLeast')
 
         bio = io.BytesIO()
         doc.save(bio)
