@@ -9,10 +9,37 @@ import os
 import copy
 import json
 import subprocess
+from subprocess import PIPE, run
 import tempfile
 import zipfile
 import shutil
+from pathlib import Path
+import re
 from PIL import Image
+
+def convert_doc_to_pdf_native(doc_file: Path, output_dir: Path = Path("."), timeout: int = 60):
+    """Converts a doc file to pdf using libreoffice directly in headless mode.
+    Implementation from Franky1/Streamlit-docx-converter.
+    """
+    exception = None
+    output = None
+    try:
+        process = run(
+            ['soffice', '--headless', '--convert-to', 'pdf:writer_pdf_Export', '--outdir', str(output_dir.resolve()), str(doc_file.resolve())],
+            stdout=PIPE, stderr=PIPE,
+            timeout=timeout, check=True
+        )
+        stdout = process.stdout.decode("utf-8")
+        re_filename = re.search(r'-> (.*?) using filter', stdout)
+        if re_filename:
+            output = Path(re_filename[1]).resolve()
+        else:
+            cand = output_dir.joinpath(doc_file.stem + ".pdf")
+            if cand.exists():
+                output = cand.resolve()
+    except Exception as e:
+        exception = e
+    return (output, exception)
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
 st.title("🏗️ ყოველდღიური რეპორტის გენერატორი (DPR)")
@@ -559,20 +586,6 @@ if generate_btn:
             # D. PHOTOS TABLE: Centered Pictures
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
-                try:
-                    # Remove tblHeader from Table 4 row 0 so it NEVER repeats on subsequent pages
-                    for th in table.rows[0]._tr.xpath('.//w:tblHeader'):
-                        th.getparent().remove(th)
-
-                    # Adjust row 0 height from 2604 to 1500 dxa so Page 2 fits all photos comfortably
-                    for trh in table.rows[0]._tr.xpath('.//w:trHeight'):
-                        trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val', '1500')
-
-                    from docx.oxml import parse_xml
-                    p_break = parse_xml('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/></w:rPr></w:pPr><w:r><w:br w:type="page"/></w:r></w:p>')
-                    table._tbl.addprevious(p_break)
-                except Exception:
-                    pass
                 num_uploaded = len(photos_data)
                 wp_idx = None
                 for r_idx, row in enumerate(table.rows):
@@ -752,56 +765,21 @@ if generate_btn:
                             clear_cell_completely(c)
                         table._tbl.append(new_tr)
 
-        # ==================== CRITICAL PRE-CONVERSION XML SANITIZATION ====================
-        # Strip all floating table coordinates so LibreOffice/Word never stacks tables
-        for tblp in doc._body._element.xpath('.//w:tblpPr'):
-            tblp.getparent().remove(tblp)
-
-        # Relax rigid row heights so rows don't clip or overlap
-        for trh in doc._body._element.xpath('.//w:trHeight'):
-            if trh.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule') == 'exact':
-                trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule', 'atLeast')
-
-        # Clean duplicate pageBreakBefore on empty paragraphs preceding tables that break pages
-        doc_body = doc._body._element
-        for idx in range(len(doc_body) - 1):
-            elem = doc_body[idx]
-            nxt_elem = doc_body[idx + 1]
-            if elem.tag.endswith('p') and not ''.join(elem.itertext()).strip():
-                nxt_pbb = nxt_elem.xpath('.//w:tr[1]//w:pageBreakBefore') if nxt_elem.tag.endswith('tbl') else []
-                if nxt_pbb:
-                    for pbb in elem.xpath('.//w:pageBreakBefore'):
-                        pbb.getparent().remove(pbb)
-
-        # Remove dangling empty paragraphs between tables that have no text, sectPr, or drawings
-        for p_elem in list(doc_body):
-            if p_elem.tag.endswith('p'):
-                txt = ''.join(p_elem.itertext()).strip()
-                sect = p_elem.xpath('.//w:sectPr')
-                drawings = p_elem.xpath('.//w:drawing')
-                brs = p_elem.xpath('.//w:br')
-                if not txt and not sect and not drawings and not brs:
-                    doc_body.remove(p_elem)
-
         bio = io.BytesIO()
         doc.save(bio)
         st.session_state["docx_bytes"] = bio.getvalue()
         st.session_state["doc_code"] = final_doc_code
 
-        # ==================== BULLETPROOF PDF CONVERSION ====================
-        temp_doc_name = f"temp_{final_doc_code}.docx"
-        temp_pdf_name = f"{final_doc_code}.pdf"
-        abs_docx = os.path.abspath(temp_doc_name)
-        abs_pdf = os.path.abspath(temp_pdf_name)
-
-        with open(abs_docx, "wb") as f_tmp:
+        # ==================== PDF CONVERSION (Franky1 Streamlit-docx-converter) ====================
+        temp_dir = Path(tempfile.mkdtemp())
+        doc_path = temp_dir / f"{final_doc_code}.docx"
+        with open(doc_path, "wb") as f_tmp:
             f_tmp.write(bio.getvalue())
 
-        pdf_converted = False
-        conversion_error = None
+        output_pdf, conv_exc = convert_doc_to_pdf_native(doc_path, output_dir=temp_dir, timeout=60)
 
-        # PRIORITY 1: Microsoft Word Engine on Windows (100% Native, Identical Output)
-        if os.name == 'nt':
+        # Fallback for Windows if soffice is not in PATH
+        if output_pdf is None and os.name == 'nt':
             try:
                 import pythoncom
                 pythoncom.CoInitialize()
@@ -809,70 +787,32 @@ if generate_btn:
                 word_app = win32com.client.DispatchEx("Word.Application")
                 word_app.Visible = False
                 word_app.DisplayAlerts = False
+                pdf_target = temp_dir / f"{final_doc_code}.pdf"
                 try:
-                    w_doc = word_app.Documents.Open(abs_docx)
-                    # 17 = wdExportFormatPDF
-                    w_doc.ExportAsFixedFormat(abs_pdf, 17)
+                    w_doc = word_app.Documents.Open(str(doc_path.resolve()))
+                    w_doc.ExportAsFixedFormat(str(pdf_target.resolve()), 17)
                     w_doc.Close(False)
+                    if pdf_target.exists():
+                        output_pdf = pdf_target
                 finally:
                     word_app.Quit()
                     pythoncom.CoUninitialize()
-
-                if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                    with open(abs_pdf, "rb") as f_pdf:
-                        st.session_state["pdf_bytes"] = f_pdf.read()
-                    pdf_converted = True
             except Exception as e_word:
-                conversion_error = e_word
+                if conv_exc is None:
+                    conv_exc = e_word
 
-            # Fallback for Windows if win32com failed
-            if not pdf_converted:
-                try:
-                    from docx2pdf import convert
-                    convert(abs_docx, abs_pdf)
-                    if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                        with open(abs_pdf, "rb") as f_pdf:
-                            st.session_state["pdf_bytes"] = f_pdf.read()
-                        pdf_converted = True
-                except Exception as e_d2p:
-                    conversion_error = e_d2p
+        if output_pdf and output_pdf.exists() and output_pdf.stat().st_size > 0:
+            with open(output_pdf, "rb") as f_pdf:
+                st.session_state["pdf_bytes"] = f_pdf.read()
+            pdf_converted = True
+        else:
+            pdf_converted = False
+            conversion_error = conv_exc
 
-        # PRIORITY 2: LibreOffice Headless (Linux / Streamlit Cloud / Fallback)
-        if not pdf_converted:
-            try:
-                user_prof = tempfile.mkdtemp()
-                soffice_bin = shutil.which("soffice") or shutil.which("libreoffice") or "soffice"
-                cmd = [
-                    soffice_bin,
-                    f"-env:UserInstallation=file://{user_prof.replace(os.sep, '/')}",
-                    "--headless",
-                    "--convert-to", "pdf",
-                    abs_docx,
-                    "--outdir", os.path.dirname(abs_docx)
-                ]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
-                candidate_pdf = abs_docx.rsplit(".", 1)[0] + ".pdf"
-                if os.path.exists(candidate_pdf) and os.path.getsize(candidate_pdf) > 0:
-                    with open(candidate_pdf, "rb") as f_pdf:
-                        st.session_state["pdf_bytes"] = f_pdf.read()
-                    pdf_converted = True
-                    if candidate_pdf != abs_pdf and os.path.exists(candidate_pdf):
-                        os.remove(candidate_pdf)
-            except Exception as e_lo:
-                if conversion_error is None:
-                    conversion_error = e_lo
-
-        # Clean up temporary disk files
-        if os.path.exists(abs_docx):
-            try:
-                os.remove(abs_docx)
-            except Exception:
-                pass
-        if os.path.exists(abs_pdf):
-            try:
-                os.remove(abs_pdf)
-            except Exception:
-                pass
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
         if not pdf_converted:
             st.warning(f"💡 შენიშვნა: PDF ვერ დაგენერირდა ({conversion_error}). გადმოწერეთ Word ფაილი.")
