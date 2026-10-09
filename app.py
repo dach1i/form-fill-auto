@@ -9,6 +9,7 @@ import os
 import copy
 import json
 import subprocess
+import tempfile
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
 st.title("🏗️ ყოველდღიური რეპორტის გენერატორი (DPR)")
@@ -151,7 +152,6 @@ def safe_replace(p, old, new):
         if old in p.text:
             p.text = p.text.replace(old, str(new))
 
-# ტექსტური უჯრედების ცენტრირება
 def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
     clear_cell_completely(cell)
     try:
@@ -168,7 +168,6 @@ def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAP
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# სურათის ზუსტად ცენტრში განთავსება
 def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
     clear_cell_completely(cell)
     try:
@@ -182,7 +181,6 @@ def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
     r = p.add_run()
     r.add_picture(io.BytesIO(file_bytes), width=width)
 
-# ქარის სიჩქარის უჯრედის ფორმატირება
 def set_clean_wind_cell(cell, wind_val):
     clear_cell_completely(cell)
     try:
@@ -321,7 +319,6 @@ for si in range(int(staff_count)):
     s_mail = sc5.text_input("ელ. ფოსტა", value=st_prev.get("mail", ""), key=f"st_m_{si}")
     staff_members.append({"num": si+1, "comp": s_comp, "pos": s_pos, "name": s_name, "phone": s_phone, "mail": s_mail})
 
-# ავტომატური შენახვა
 current_state_to_save = {
     "rep_num": rep_num,
     "rep_date": rep_date.strftime("%Y-%m-%d"),
@@ -374,21 +371,21 @@ if generate_btn:
             "სამუშაეობა": "სამუშაოები"
         }
 
-        # 1. აბზაცების განახლება
+        # 1. Update Paragraphs
         for p in doc.paragraphs:
             for k, v in replacements.items():
                 safe_replace(p, k, v)
 
-        # 2. ცხრილების განახლება
+        # 2. Iterate Tables
         for table in doc.tables:
-            # A. ზოგადი placeholder-ების ჩანაცვლება
+            # A. General Placeholder Replacements
             for row in table.rows:
                 for cell in row.cells:
                     for p in cell.paragraphs:
                         for k, v in replacements.items():
                             safe_replace(p, k, v)
 
-            # B. ქარის სიჩქარე
+            # B. Direct Wind Speed Replacement
             for row in table.rows:
                 row_txt = " ".join([c.text for c in row.cells]).lower()
                 if "wind speed" in row_txt or "ქარის სიჩქარე" in row_txt:
@@ -406,7 +403,7 @@ if generate_btn:
                     if len(wind_cells) >= 3:
                         set_clean_wind_cell(wind_cells[2], w18)
 
-            # C. სამუშაოების ცხრილი: 100% ცენტრირება
+            # C. DAILY WORKS TABLE: 100% Centered Population
             works_h_idx = None
             photo_b_idx = None
             for r_idx, row in enumerate(table.rows):
@@ -481,7 +478,7 @@ if generate_btn:
                                 populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
                         table._tbl.append(new_tr)
 
-            # D. ფოტოების ცხრილი: სურათების ზუსტი ცენტრირება
+            # D. PHOTOS TABLE: Centered Pictures
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
                 num_uploaded = len(photos_data)
@@ -507,7 +504,6 @@ if generate_btn:
                             slot_a = p_i * 2
                             slot_b = p_i * 2 + 1
 
-                            # სლოტი A (მარცხენა ფოტო)
                             if slot_a < num_uploaded:
                                 insert_centered_picture(p_row.cells[0], photos_data[slot_a]["file"].getvalue(), width=Inches(3.15))
                                 populate_cell(c_row.cells[0], photos_data[slot_a]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
@@ -515,7 +511,6 @@ if generate_btn:
                                 clear_cell_completely(p_row.cells[0])
                                 clear_cell_completely(c_row.cells[0])
 
-                            # სლოტი B (მარჯვენა ფოტო)
                             if slot_b < num_uploaded:
                                 insert_centered_picture(p_row.cells[1], photos_data[slot_b]["file"].getvalue(), width=Inches(3.15))
                                 populate_cell(c_row.cells[1], photos_data[slot_b]["caption"], font_size=8.0, align=WD_ALIGN_PARAGRAPH.CENTER)
@@ -523,7 +518,7 @@ if generate_btn:
                                 clear_cell_completely(p_row.cells[1])
                                 clear_cell_completely(c_row.cells[1])
 
-                    # დამატებითი ფოტოები (> 6)
+                    # Extra Photos (> 6)
                     if num_uploaded > 6:
                         remaining_photos = photos_data[6:]
                         proc_counter = 4
@@ -552,7 +547,6 @@ if generate_btn:
 
                             new_p_tr = copy.deepcopy(sample_photo_row._tr)
                             new_p_row = docx.table._Row(new_p_tr, table)
-
                             new_c_tr = copy.deepcopy(sample_cap_row._tr)
                             new_c_row = docx.table._Row(new_c_tr, table)
 
@@ -577,7 +571,7 @@ if generate_btn:
 
                             proc_counter += 1
 
-            # E. პერსონალის (Key Staff) ცხრილი: 100% ცენტრირება
+            # E. KEY STAFF TABLE: 100% Centered
             staff_h_idx = None
             sig_r_idx = None
             for r_idx, row in enumerate(table.rows):
@@ -666,12 +660,22 @@ if generate_btn:
                             clear_cell_completely(c)
                         table._tbl.append(new_tr)
 
+        # ==================== CRITICAL PRE-CONVERSION XML SANITIZATION ====================
+        # Strip all floating table coordinates so LibreOffice/Word never stacks tables
+        for tblp in doc._body._element.xpath('.//w:tblpPr'):
+            tblp.getparent().remove(tblp)
+
+        # Relax rigid row heights so rows don't clip or overlap
+        for trh in doc._body._element.xpath('.//w:trHeight'):
+            if trh.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule') == 'exact':
+                trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule', 'atLeast')
+
         bio = io.BytesIO()
         doc.save(bio)
         st.session_state["docx_bytes"] = bio.getvalue()
         st.session_state["doc_code"] = final_doc_code
 
-        # ==================== PDF CONVERSION ====================
+        # ==================== BULLETPROOF PDF CONVERSION ====================
         temp_doc_name = f"temp_{final_doc_code}.docx"
         temp_pdf_name = f"{final_doc_code}.pdf"
         abs_docx = os.path.abspath(temp_doc_name)
@@ -683,49 +687,68 @@ if generate_btn:
         pdf_converted = False
         conversion_error = None
 
-        # 1. LibreOffice (Cloud / Linux)
-        try:
-            cmd = ["soffice", "--headless", "--convert-to", "pdf", abs_docx, "--outdir", os.path.dirname(abs_docx)]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
-            candidate_pdf = abs_docx.rsplit(".", 1)[0] + ".pdf"
-            if os.path.exists(candidate_pdf):
-                with open(candidate_pdf, "rb") as f_pdf:
-                    st.session_state["pdf_bytes"] = f_pdf.read()
-                pdf_converted = True
-                if os.path.exists(candidate_pdf):
-                    os.remove(candidate_pdf)
-        except Exception as e:
-            conversion_error = e
-
-        # 2. Windows MS Word (Local PC)
-        if not pdf_converted:
+        # PRIORITY 1: Microsoft Word Engine on Windows (100% Native, Identical Output)
+        if os.name == 'nt':
             try:
                 import pythoncom
                 pythoncom.CoInitialize()
-                from docx2pdf import convert
-                convert(abs_docx, abs_pdf)
-                if os.path.exists(abs_pdf):
+                import win32com.client
+                word_app = win32com.client.DispatchEx("Word.Application")
+                word_app.Visible = False
+                word_app.DisplayAlerts = False
+                try:
+                    w_doc = word_app.Documents.Open(abs_docx)
+                    # 17 = wdExportFormatPDF
+                    w_doc.ExportAsFixedFormat(abs_pdf, 17)
+                    w_doc.Close(False)
+                finally:
+                    word_app.Quit()
+                    pythoncom.CoUninitialize()
+
+                if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
                     with open(abs_pdf, "rb") as f_pdf:
                         st.session_state["pdf_bytes"] = f_pdf.read()
                     pdf_converted = True
-            except Exception:
+            except Exception as e_word:
+                conversion_error = e_word
+
+            # Fallback for Windows if win32com failed
+            if not pdf_converted:
                 try:
-                    import win32com.client
-                    word_app = win32com.client.DispatchEx("Word.Application")
-                    word_app.Visible = False
-                    word_app.DisplayAlerts = False
-                    w_doc = word_app.Documents.Open(abs_docx)
-                    w_doc.SaveAs(abs_pdf, FileFormat=17)
-                    w_doc.Close()
-                    word_app.Quit()
-                    if os.path.exists(abs_pdf):
+                    from docx2pdf import convert
+                    convert(abs_docx, abs_pdf)
+                    if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
                         with open(abs_pdf, "rb") as f_pdf:
                             st.session_state["pdf_bytes"] = f_pdf.read()
                         pdf_converted = True
-                except Exception as e2:
-                    conversion_error = e2
-                    st.session_state["pdf_bytes"] = None
+                except Exception as e_d2p:
+                    conversion_error = e_d2p
 
+        # PRIORITY 2: LibreOffice Headless (Linux / Streamlit Cloud / Fallback)
+        if not pdf_converted:
+            try:
+                user_prof = tempfile.mkdtemp()
+                cmd = [
+                    "soffice",
+                    f"-env:UserInstallation=file://{user_prof.replace(os.sep, '/')}",
+                    "--headless",
+                    "--convert-to", "pdf",
+                    abs_docx,
+                    "--outdir", os.path.dirname(abs_docx)
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+                candidate_pdf = abs_docx.rsplit(".", 1)[0] + ".pdf"
+                if os.path.exists(candidate_pdf) and os.path.getsize(candidate_pdf) > 0:
+                    with open(candidate_pdf, "rb") as f_pdf:
+                        st.session_state["pdf_bytes"] = f_pdf.read()
+                    pdf_converted = True
+                    if candidate_pdf != abs_pdf and os.path.exists(candidate_pdf):
+                        os.remove(candidate_pdf)
+            except Exception as e_lo:
+                if conversion_error is None:
+                    conversion_error = e_lo
+
+        # Clean up temporary disk files
         if os.path.exists(abs_docx):
             try:
                 os.remove(abs_docx)
