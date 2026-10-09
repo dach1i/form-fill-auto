@@ -560,7 +560,17 @@ if generate_btn:
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
                 try:
-                    table.rows[0].cells[0].paragraphs[0].paragraph_format.page_break_before = True
+                    # Remove tblHeader from Table 4 row 0 so it NEVER repeats on subsequent pages
+                    for th in table.rows[0]._tr.xpath('.//w:tblHeader'):
+                        th.getparent().remove(th)
+
+                    # Adjust row 0 height from 2604 to 1500 dxa so Page 2 fits all photos comfortably
+                    for trh in table.rows[0]._tr.xpath('.//w:trHeight'):
+                        trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val', '1500')
+
+                    from docx.oxml import parse_xml
+                    p_break = parse_xml('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/></w:rPr></w:pPr><w:r><w:br w:type="page"/></w:r></w:p>')
+                    table._tbl.addprevious(p_break)
                 except Exception:
                     pass
                 num_uploaded = len(photos_data)
@@ -769,7 +779,8 @@ if generate_btn:
                 txt = ''.join(p_elem.itertext()).strip()
                 sect = p_elem.xpath('.//w:sectPr')
                 drawings = p_elem.xpath('.//w:drawing')
-                if not txt and not sect and not drawings:
+                brs = p_elem.xpath('.//w:br')
+                if not txt and not sect and not drawings and not brs:
                     doc_body.remove(p_elem)
 
         bio = io.BytesIO()
