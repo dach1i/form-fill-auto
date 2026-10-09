@@ -1,4 +1,7 @@
-libreoffice
+default-jre-headless
+libreoffice-core-nogui
+libreoffice-writer-nogui
+libreoffice-java-common
 fonts-dejavu
 fonts-noto-core
 fonts-crosextra-carlito
