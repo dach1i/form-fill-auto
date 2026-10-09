@@ -10,6 +10,9 @@ import copy
 import json
 import subprocess
 import tempfile
+import zipfile
+import shutil
+from PIL import Image
 
 st.set_page_config(page_title="DPR Generator", page_icon="🏗️", layout="wide")
 st.title("🏗️ ყოველდღიური რეპორტის გენერატორი (DPR)")
@@ -168,6 +171,53 @@ def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAP
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
+WEATHER_ICON_MAP = {
+    "მზიანი/sunny": "word/media/image3.png",
+    "ნაწ. მოღრ./p. cloudy": "word/media/image4.png",
+    "მოღრუბლ./cloudy": "word/media/image5.png",
+    "წვიმიანი/rainy": "word/media/image6.png",
+    "თოვლიანი/snowy": "word/media/image7.png",
+}
+
+def load_weather_icons(docx_path):
+    icons = {}
+    try:
+        with zipfile.ZipFile(docx_path, 'r') as z:
+            for cond, arc in WEATHER_ICON_MAP.items():
+                if arc in z.namelist():
+                    icons[cond] = z.read(arc)
+    except Exception:
+        pass
+    return icons
+
+def set_weather_icon_cell(cell, condition_str, icons_dict):
+    clear_cell_completely(cell)
+    try:
+        tcPr = cell._tc.get_or_add_tcPr()
+        for child in list(tcPr):
+            if child.tag.endswith('shd'):
+                tcPr.remove(child)
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsdecls
+        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="262626"/>')
+        tcPr.append(shd)
+    except Exception:
+        pass
+    try:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    except Exception:
+        pass
+    p = cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.0
+
+    img_data = icons_dict.get(condition_str) if icons_dict else None
+    if img_data:
+        r = p.add_run()
+        r.add_picture(io.BytesIO(img_data), width=Inches(1.15))
+
 def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
     clear_cell_completely(cell)
     try:
@@ -176,10 +226,30 @@ def insert_centered_picture(cell, file_bytes, width=Inches(3.15)):
         pass
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
+
+    max_w_in = 3.4
+    max_h_in = 2.0
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            w_px, h_px = img.size
+            aspect = h_px / w_px
+            if aspect > (max_h_in / max_w_in):
+                target_height = Inches(max_h_in)
+                target_width = Inches(max_h_in / aspect)
+            else:
+                target_width = Inches(max_w_in)
+                target_height = Inches(max_w_in * aspect)
+    except Exception:
+        target_width = Inches(max_w_in)
+        target_height = None
+
     r = p.add_run()
-    r.add_picture(io.BytesIO(file_bytes), width=width)
+    if target_height:
+        r.add_picture(io.BytesIO(file_bytes), width=target_width, height=target_height)
+    else:
+        r.add_picture(io.BytesIO(file_bytes), width=target_width)
 
 def set_clean_wind_cell(cell, wind_val):
     clear_cell_completely(cell)
@@ -345,6 +415,7 @@ generate_btn = st.button("🚀 რეპორტის შექმნა / Gen
 if generate_btn:
     try:
         doc = docx.Document(target_file)
+        weather_icons = load_weather_icons(target_file)
         formatted_date = rep_date.strftime("%Y/%m/%d")
         final_doc_code = custom_doc_code.strip() if custom_doc_code.strip() else f"CMC-CMS-DPR-{rep_num or '001'}-{rep_date.strftime('%Y%m%d')}-Rev00"
 
@@ -385,23 +456,30 @@ if generate_btn:
                         for k, v in replacements.items():
                             safe_replace(p, k, v)
 
-            # B. Direct Wind Speed Replacement
+            # B. Weather Row: Clean Wind Speed & Weather Icons (Eliminate broken IF/REF field codes)
             for row in table.rows:
                 row_txt = " ".join([c.text for c in row.cells]).lower()
                 if "wind speed" in row_txt or "ქარის სიჩქარე" in row_txt:
-                    seen_tcs = set()
-                    wind_cells = []
-                    for c in row.cells:
-                        if c._tc not in seen_tcs and ("wind speed" in c.text.lower() or "ქარის სიჩქარე" in c.text):
-                            seen_tcs.add(c._tc)
-                            wind_cells.append(c)
-
-                    if len(wind_cells) >= 1:
-                        set_clean_wind_cell(wind_cells[0], w9)
-                    if len(wind_cells) >= 2:
-                        set_clean_wind_cell(wind_cells[1], w14)
-                    if len(wind_cells) >= 3:
-                        set_clean_wind_cell(wind_cells[2], w18)
+                    if len(row.cells) == 6:
+                        set_clean_wind_cell(row.cells[0], w9)
+                        set_weather_icon_cell(row.cells[1], cond9, weather_icons)
+                        set_clean_wind_cell(row.cells[2], w14)
+                        set_weather_icon_cell(row.cells[3], cond14, weather_icons)
+                        set_clean_wind_cell(row.cells[4], w18)
+                        set_weather_icon_cell(row.cells[5], cond18, weather_icons)
+                    else:
+                        seen_tcs = set()
+                        wind_cells = []
+                        for c in row.cells:
+                            if c._tc not in seen_tcs and ("wind speed" in c.text.lower() or "ქარის სიჩქარე" in c.text):
+                                seen_tcs.add(c._tc)
+                                wind_cells.append(c)
+                        if len(wind_cells) >= 1:
+                            set_clean_wind_cell(wind_cells[0], w9)
+                        if len(wind_cells) >= 2:
+                            set_clean_wind_cell(wind_cells[1], w14)
+                        if len(wind_cells) >= 3:
+                            set_clean_wind_cell(wind_cells[2], w18)
 
             # C. DAILY WORKS TABLE: 100% Centered Population
             works_h_idx = None
@@ -481,6 +559,10 @@ if generate_btn:
             # D. PHOTOS TABLE: Centered Pictures
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
+                try:
+                    table.rows[0].cells[0].paragraphs[0].paragraph_format.page_break_before = True
+                except Exception:
+                    pass
                 num_uploaded = len(photos_data)
                 wp_idx = None
                 for r_idx, row in enumerate(table.rows):
@@ -670,6 +752,26 @@ if generate_btn:
             if trh.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule') == 'exact':
                 trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule', 'atLeast')
 
+        # Clean duplicate pageBreakBefore on empty paragraphs preceding tables that break pages
+        doc_body = doc._body._element
+        for idx in range(len(doc_body) - 1):
+            elem = doc_body[idx]
+            nxt_elem = doc_body[idx + 1]
+            if elem.tag.endswith('p') and not ''.join(elem.itertext()).strip():
+                nxt_pbb = nxt_elem.xpath('.//w:tr[1]//w:pageBreakBefore') if nxt_elem.tag.endswith('tbl') else []
+                if nxt_pbb:
+                    for pbb in elem.xpath('.//w:pageBreakBefore'):
+                        pbb.getparent().remove(pbb)
+
+        # Remove dangling empty paragraphs between tables that have no text, sectPr, or drawings
+        for p_elem in list(doc_body):
+            if p_elem.tag.endswith('p'):
+                txt = ''.join(p_elem.itertext()).strip()
+                sect = p_elem.xpath('.//w:sectPr')
+                drawings = p_elem.xpath('.//w:drawing')
+                if not txt and not sect and not drawings:
+                    doc_body.remove(p_elem)
+
         bio = io.BytesIO()
         doc.save(bio)
         st.session_state["docx_bytes"] = bio.getvalue()
@@ -728,8 +830,9 @@ if generate_btn:
         if not pdf_converted:
             try:
                 user_prof = tempfile.mkdtemp()
+                soffice_bin = shutil.which("soffice") or shutil.which("libreoffice") or "soffice"
                 cmd = [
-                    "soffice",
+                    soffice_bin,
                     f"-env:UserInstallation=file://{user_prof.replace(os.sep, '/')}",
                     "--headless",
                     "--convert-to", "pdf",
