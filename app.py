@@ -152,7 +152,33 @@ def safe_replace(p, old, new):
         if old in p.text:
             p.text = p.text.replace(old, str(new))
 
-# Universal cell writer: 100% horizontal & vertical centering
+# Forces a table row to start at the top of a new page
+def force_row_to_new_page(row):
+    for cell in row.cells:
+        for p in cell.paragraphs:
+            p.paragraph_format.page_break_before = True
+            p.paragraph_format.keep_with_next = True
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pageBreakBefore') is None:
+                pPr.append(docx.oxml.OxmlElement('w:pageBreakBefore'))
+            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}keepNext') is None:
+                pPr.append(docx.oxml.OxmlElement('w:keepNext'))
+    trPr = row._tr.get_or_add_trPr()
+    if trPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cantSplit') is None:
+        trPr.append(docx.oxml.OxmlElement('w:cantSplit'))
+
+# Keeps a row linked to the next row (no orphan headers)
+def keep_row_with_next(row):
+    for cell in row.cells:
+        for p in cell.paragraphs:
+            p.paragraph_format.keep_with_next = True
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}keepNext') is None:
+                pPr.append(docx.oxml.OxmlElement('w:keepNext'))
+    trPr = row._tr.get_or_add_trPr()
+    if trPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}cantSplit') is None:
+        trPr.append(docx.oxml.OxmlElement('w:cantSplit'))
+
 def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
     clear_cell_completely(cell)
     try:
@@ -169,8 +195,8 @@ def populate_cell(cell, text, font_size=8.0, bold=False, align=WD_ALIGN_PARAGRAP
     r.font.bold = bold
     r.font.color.rgb = RGBColor(0, 0, 0)
 
-# Intelligent image scaler: prevents portrait dialog screenshots from overflowing
-def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=2.05):
+# Scaled centered pictures fitting 6 items per page without overflowing
+def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=1.95):
     clear_cell_completely(cell)
     try:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -178,8 +204,8 @@ def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=2.05):
         pass
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
     p.paragraph_format.line_spacing = 1.0
 
     try:
@@ -188,7 +214,6 @@ def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=2.05):
         aspect = w_px / h_px
 
         r = p.add_run()
-        # If portrait/tall screenshot, constrain by height so it doesn't push the table down
         if (max_w_in / aspect) > max_h_in:
             r.add_picture(io.BytesIO(file_bytes), height=Inches(max_h_in))
         else:
@@ -197,7 +222,6 @@ def insert_centered_picture(cell, file_bytes, max_w_in=3.15, max_h_in=2.05):
         r = p.add_run()
         r.add_picture(io.BytesIO(file_bytes), width=Inches(max_w_in))
 
-# Direct wind speed cell writer
 def set_clean_wind_cell(cell, wind_val):
     clear_cell_completely(cell)
     try:
@@ -336,7 +360,6 @@ for si in range(int(staff_count)):
     s_mail = sc5.text_input("ელ. ფოსტა", value=st_prev.get("mail", ""), key=f"st_m_{si}")
     staff_members.append({"num": si+1, "comp": s_comp, "pos": s_pos, "name": s_name, "phone": s_phone, "mail": s_mail})
 
-# Silent Autosave
 current_state_to_save = {
     "rep_num": rep_num,
     "rep_date": rep_date.strftime("%Y-%m-%d"),
@@ -446,6 +469,10 @@ if generate_btn:
 
                 if photo_b_idx is not None:
                     photo_banner_row = table.rows[photo_b_idx]
+                    
+                    # Force Photo Banner to start on Page 2
+                    force_row_to_new_page(photo_banner_row)
+
                     for r_i in range(works_h_idx + 1, photo_b_idx):
                         if sample_task_tr is None:
                             sample_task_tr = copy.deepcopy(table.rows[r_i]._tr)
@@ -496,15 +523,24 @@ if generate_btn:
                                 populate_cell(new_row.cells[c_idx], val, font_size=8.0, bold=(c_idx in [0, 4]), align=WD_ALIGN_PARAGRAPH.CENTER)
                         table._tbl.append(new_tr)
 
-            # D. PHOTOS TABLE: Scaled Centered Pictures (No Row Overflows)
+            # D. PHOTOS TABLE: Force Banner to Page 2 & Scaled Centered Pictures
             t_text = " ".join([c.text for row in table.rows for c in row.cells])
             if "ფოტომასალა" in t_text or "Daily Work Progress Photos" in t_text:
                 num_uploaded = len(photos_data)
+                
+                # Enforce page break on Photo Banner
+                for row in table.rows:
+                    r_txt = " ".join([c.text for c in row.cells])
+                    if "ფოტომასალა" in r_txt or "Work Progress Photos" in r_txt:
+                        force_row_to_new_page(row)
+                        break
+
                 wp_idx = None
                 for r_idx, row in enumerate(table.rows):
                     r_txt = " ".join([c.text for c in row.cells])
                     if "სამუშაო პროცესი" in r_txt or "Work Process" in r_txt:
                         wp_idx = r_idx
+                        keep_row_with_next(row)
                         break
 
                 if wp_idx is not None:
@@ -681,11 +717,9 @@ if generate_btn:
                         table._tbl.append(new_tr)
 
         # ==================== FINAL SANITIZATION BEFORE SAVING ====================
-        # Strip all floating table positions so tables never overlap in PDF
         for tblp in doc._body._element.xpath('.//w:tblpPr'):
             tblp.getparent().remove(tblp)
 
-        # Convert exact row heights to dynamic heights
         for trh in doc._body._element.xpath('.//w:trHeight'):
             if trh.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule') == 'exact':
                 trh.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hRule', 'atLeast')
